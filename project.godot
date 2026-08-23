@@ -12,9 +12,13 @@ config_version=5
 
 config/name="Iron Dust"
 config/description="1872, americký jihozápad. Ekonomicko-strategická tahová hra."
-run/main_scene="res://scenes/test_map.tscn"
+run/main_scene="res://scenes/game.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
 config/icon="res://icon.svg"
+
+[autoload]
+
+GameState="*res://scripts/game/game_state.gd"
 
 [display]
 
