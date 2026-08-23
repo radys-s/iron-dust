@@ -1,0 +1,14 @@
+# Godot 4 editor cache and imported resources
+.godot/
+/android/
+
+# Exported builds
+/builds/
+*.exe
+*.pck
+*.zip
+
+# OS / editor cruft
+Thumbs.db
+desktop.ini
+.DS_Store

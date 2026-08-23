@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IRON DUST - 1872 American Southwest</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body x-data="gameUI()" x-init="init()">
+    <div id="main-menu" x-show="showMainMenu" x-cloak>
+        <h1 class="menu-title">IRON DUST</h1>
+        <p class="menu-subtitle">1872</p>
+        <div class="flex flex-col items-center space-y-4">
+            <input type="text" id="player-name-input" class="menu-input w-64" placeholder="Jméno inženýra..." maxlength="20">
+            <button @click="startNewGame()" class="menu-btn">NOVÁ HRA</button>
+            <button @click="loadGame(1)" class="menu-btn" :disabled="!hasSave(1)" :class="!hasSave(1) ? 'opacity-30 cursor-not-allowed' : ''">POKRAČOVAT</button>
+            <button @click="showMainMenu = false" class="menu-btn">POKRAČOVAT BEZ MENU</button>
+        </div>
+    </div>
+
+    <div id="game-container"></div>
+
+    <div class="fixed top-4 left-4 dark-panel p-4 rounded-lg w-72 pointer-events-auto z-30" x-cloak>
+        <div class="flex justify-between items-center border-b border-yellow-700 mb-2 gap-2">
+            <h1 class="text-xl font-bold tracking-widest" x-text="'IRON DUST — ' + (GAME.playerName || 'Hráč')"></h1>
+            <div class="flex space-x-1 shrink-0">
+                <button @click="saveGame(1)" class="text-xs hover:text-white" title="Uložit do slotu 1">💾1</button>
+                <button @click="saveGame(2)" class="text-xs hover:text-white" title="Uložit do slotu 2">💾2</button>
+                <button @click="saveGame(3)" class="text-xs hover:text-white" title="Uložit do slotu 3">💾3</button>
+            </div>
+        </div>
+        <div class="flex justify-between text-sm mb-3 italic">
+            <span x-text="GAME.season"></span>
+            <span x-text="GAME.year"></span>
+        </div>
+        <div class="grid grid-cols-2 gap-2 text-xs">
+            <template x-for="resource in resourceMeta" :key="resource.key">
+                <div class="relative flex justify-between resource-row">
+                    <span class="flex items-center gap-1">
+                        <span x-text="resource.icon"></span>
+                        <span x-text="resource.label + ':'"></span>
+                    </span>
+                    <span class="font-bold" x-text="GAME.resources[resource.key]"></span>
+                    <div class="resource-indicator-stack">
+                        <template x-for="change in (GAME.resourceChanges[resource.key] || [])" :key="change.id">
+                            <span class="resource-change" :class="change.className" x-text="change.text"></span>
+                        </template>
+                    </div>
+                </div>
+            </template>
+        </div>
+        <div class="mt-3 pt-2 border-t border-yellow-900 text-[10px] text-green-400 flex flex-wrap gap-x-3 gap-y-1">
+            <span x-text="perTurnToken('food')"></span>
+            <span x-text="perTurnToken('iron')"></span>
+            <span x-text="perTurnToken('gold')"></span>
+            <span x-text="perTurnToken('wood')"></span>
+            <span x-text="perTurnToken('coal')"></span>
+            <span x-text="perTurnToken('salt')"></span>
+        </div>
+        <div class="mt-2 pt-2 border-t border-yellow-900 text-[10px] flex justify-between opacity-75">
+            <span>Populace: <span x-text="GAME.population"></span></span>
+            <span>Kapacita: <span x-text="GAME.production.storageCapacity"></span></span>
+        </div>
+        <div class="text-[10px] flex justify-between opacity-75">
+            <span>Dostavník za: <span x-text="GAME.dostavnikIn"></span></span>
+            <span>Budovy: <span x-text="GAME.buildings.length"></span></span>
+        </div>
+    </div>
+
+    <div class="fixed top-4 right-4 dark-panel p-4 rounded-lg w-72 pointer-events-auto z-30" x-show="GAME.selectedTile" x-transition x-cloak>
+        <div class="flex justify-between items-start mb-2 gap-3">
+            <h2 class="text-lg font-bold" x-text="getTileName(GAME.selectedTile?.type)"></h2>
+            <button @click="GAME.selectedTile = null" class="text-yellow-700 hover:text-yellow-500">✕</button>
+        </div>
+        <p class="text-xs italic mb-3 opacity-80" x-text="getTileDescription(GAME.selectedTile?.type)"></p>
+        <p class="text-[11px] mb-3 opacity-70" x-show="getTileResourceHint(GAME.selectedTile?.type)" x-text="'Klíčová surovina: ' + getTileResourceHint(GAME.selectedTile?.type)"></p>
+        <div class="text-[11px] mb-3 opacity-80" x-show="selectedBuildingAt(GAME.selectedTile?.col, GAME.selectedTile?.row)">
+            Budova: <span class="text-yellow-400 font-bold" x-text="selectedBuildingAt(GAME.selectedTile?.col, GAME.selectedTile?.row)?.name"></span>
+        </div>
+        <div class="space-y-2">
+            <template x-for="(action, index) in getTileActions(GAME.selectedTile?.type)" :key="index">
+                <button @click="handleAction(GAME.selectedTile.type, index)" class="w-full py-2 px-3 text-left text-xs btn-gold rounded border border-yellow-900 flex justify-between items-center">
+                    <span x-text="action"></span>
+                    <span class="opacity-50">→</span>
+                </button>
+            </template>
+        </div>
+    </div>
+
+    <div class="fixed top-20 left-1/2 -translate-x-1/2 bg-yellow-600 text-black px-6 py-2 rounded-full font-bold shadow-2xl pointer-events-none z-30"
+         x-show="GAME.mode === 'explore'" x-transition x-cloak>
+        PRŮZKUMNÍK — vyberte oblast k prozkoumání
+    </div>
+
+    <div class="fixed top-32 left-1/2 -translate-x-1/2 pointer-events-none z-30" x-show="showModeBadge()" x-cloak>
+        <div class="mode-badge" :class="modeBadgeClass()" x-text="modeBadgeText()"></div>
+    </div>
+
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm" x-show="GAME.mode === 'tech'" x-transition x-cloak>
+        <div class="parchment w-[92%] h-[86%] max-w-6xl p-8 flex flex-col relative">
+            <button @click="setMode('normal')" class="absolute top-4 right-4 text-2xl hover:scale-110 transition-transform">✕</button>
+            <h2 class="text-3xl font-bold mb-2 text-center uppercase tracking-widest">Technologický Strom</h2>
+            <p class="text-center mb-6 italic">Tech Body: <span class="font-bold text-xl" x-text="GAME.techTree.points"></span></p>
+
+            <div class="flex-1 overflow-x-auto flex space-x-8 pb-4">
+                <template x-for="branch in techBranches" :key="branch">
+                    <div class="flex-shrink-0 w-52">
+                        <h3 class="text-center font-bold border-b border-yellow-900 mb-4 uppercase text-sm" x-text="branchLabel(branch)"></h3>
+                        <div class="space-y-3">
+                            <template x-for="node in techNodesByBranch(branch)" :key="node.id">
+                                <div class="tech-node-card"
+                                     :class="GAME.techTree.researched.includes(node.id) ? 'tech-node-researched' : (canResearch(node.id) ? 'tech-node-available' : 'tech-node-locked')"
+                                     @click="researchNode(node.id)">
+                                    <div class="font-bold mb-1" x-text="node.name"></div>
+                                    <div class="opacity-80 mb-2" x-text="node.desc"></div>
+                                    <div class="flex justify-between items-center">
+                                        <span class="font-bold" x-text="'Cena: ' + node.cost"></span>
+                                        <span x-show="GAME.techTree.researched.includes(node.id)">✅</span>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+
+    <div class="fixed top-0 left-0 h-full w-80 parchment z-50 transition-transform duration-500 flex flex-col"
+         :class="showStory ? 'translate-x-0' : '-translate-x-full'" x-cloak>
+        <div class="p-4 border-b border-yellow-900 flex justify-between items-center">
+            <div class="flex space-x-4">
+                <button @click="storyTab = 'pribeh'" :class="storyTab === 'pribeh' ? 'tab-active' : ''" class="font-bold uppercase text-sm">Příběh</button>
+                <button @click="storyTab = 'kronika'" :class="storyTab === 'kronika' ? 'tab-active' : ''" class="font-bold uppercase text-sm">Kronika</button>
+            </div>
+            <button @click="showStory = false" class="text-xl">✕</button>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-6 text-sm leading-relaxed">
+            <div x-show="storyTab === 'pribeh'">
+                <p class="mb-4">Rok 1872. Jsi zkrachovalý inženýr. Most přes řeku Colorado se zřítil — tvoje dílo, tvoje vina. Nebo tak říkají.</p>
+                <p class="mb-4">Harlan-Voss Railway Co. tě vyhodila a přivlastnila si tvůj patent na parní kompresor.</p>
+                <p class="mb-4">Teď stojíš v Dustfall, Nevada. 12 dolarů, kreslící nástroje a vztek který tě drží při životě.</p>
+                <p class="mb-4">Ale vidíš co ostatní ne — tři obchodní cesty se tu kříží. Tohle může být pupkem celého regionu.</p>
+                <p class="mb-4 italic">Iniciály C.H. v dokumentu. Calvin Harrow. Sabotér. Najdeš ho.</p>
+                <p>Harlan-Voss přijde. Vždy přijdou. Budeš připraven.</p>
+            </div>
+            <div x-show="storyTab === 'kronika'">
+                <template x-for="entry in GAME.storyLog.slice().reverse()" :key="entry.text + entry.turnCount">
+                    <div class="mb-3 pb-2 border-b border-yellow-800/30">
+                        <div class="text-[10px] opacity-60" x-text="entry.season + ' ' + entry.year"></div>
+                        <div x-text="entry.text"></div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+
+    <div class="fixed top-0 right-0 h-full w-80 dark-panel z-50 transition-transform duration-500 flex flex-col"
+         :class="GAME.mode === 'build' ? 'translate-x-0' : 'translate-x-full'" x-cloak>
+        <div class="p-4 border-b border-yellow-700 flex justify-between items-center">
+            <h2 class="font-bold uppercase tracking-widest">Stavební plány</h2>
+            <button @click="cancelCurrentMode()" class="text-xl">✕</button>
+        </div>
+        <div class="flex-1 overflow-y-auto p-4 space-y-4">
+            <template x-for="b in buildables" :key="b.name">
+                <div class="build-card p-3 border border-yellow-900 rounded bg-zinc-900/50 hover:bg-zinc-800 cursor-pointer transition-colors"
+                     :class="{
+                        'build-card-unavailable': !canAffordBuilding(b),
+                        'build-card-shake': shakeBuilding === b.name,
+                        'build-card-selected': GAME.selectedBuilding?.name === b.name
+                     }"
+                     @click="selectBuilding(b)">
+                    <div class="flex justify-between items-start gap-3 mb-2">
+                        <div>
+                            <div class="font-bold text-yellow-500" x-text="b.name"></div>
+                            <div class="text-[10px] opacity-70 mt-1" x-text="b.effect"></div>
+                        </div>
+                        <div class="w-9 h-9 flex items-center justify-center border border-yellow-900 rounded-full text-lg shrink-0" x-text="b.icon"></div>
+                    </div>
+                    <div class="flex flex-wrap gap-2 mb-2">
+                        <template x-for="cost in formatCosts(b.costs)" :key="b.name + cost.key">
+                            <span class="cost-chip" :class="cost.className" x-text="cost.icon + ' ' + cost.amount"></span>
+                        </template>
+                    </div>
+                    <div class="flex items-center justify-between gap-3 text-[10px]">
+                        <span class="availability-badge availability-ok" x-show="canAffordBuilding(b)">Dostupné</span>
+                        <span class="availability-badge availability-missing" x-show="!canAffordBuilding(b)" x-text="'Chybí: ' + getMissingText(b)"></span>
+                        <span class="opacity-50" x-text="formatProductionLine(b.production)"></span>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <div class="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center p-10" x-show="GAME.mode === 'caravan'" x-transition x-cloak>
+        <div class="parchment w-full max-w-4xl h-[80vh] flex flex-col relative">
+            <button @click="cancelCurrentMode()" class="absolute top-4 right-4 text-2xl">✕</button>
+            <div class="p-6 border-b border-yellow-900">
+                <h2 class="text-2xl font-bold text-center uppercase tracking-widest">KARAVANA — vyberte cíl transportu</h2>
+            </div>
+            <div class="flex-1 flex">
+                <div class="flex-1 bg-black/20 m-4 border border-yellow-900/50 flex items-center justify-center relative overflow-hidden">
+                    <div class="text-center opacity-40">
+                        <div class="text-6xl mb-4">🗺</div>
+                        <p>Klikněte na město nebo vlastněné území na mapě</p>
+                    </div>
+                </div>
+                <div class="w-72 p-6 border-l border-yellow-900 flex flex-col">
+                    <div x-show="!selectedCaravanDest" class="text-center italic opacity-60 mt-20">
+                        Vyberte cíl na mapě pro zobrazení detailů trasy.
+                    </div>
+                    <div x-show="selectedCaravanDest" class="space-y-4">
+                        <h3 class="font-bold border-b border-yellow-900 pb-1">Detail trasy</h3>
+                        <div class="text-sm">
+                            <div class="flex justify-between"><span>Původ:</span> <span>Dustfall</span></div>
+                            <div class="flex justify-between"><span>Cíl:</span> <span x-text="selectedCaravanDest?.name"></span></div>
+                            <div class="flex justify-between"><span>Doba:</span> <span x-text="selectedCaravanDest?.dist + ' měsíce'"></span></div>
+                            <div class="flex justify-between"><span>Kapacita:</span> <span>80 jednotek</span></div>
+                        </div>
+                        <button @click="sendCaravan(false)" class="w-full py-2 btn-gold rounded text-sm">Vyslat prázdnou</button>
+                        <button @click="sendCaravan(true)" class="w-full py-2 btn-gold rounded text-sm">Naložit zásoby</button>
+                        <button @click="selectedCaravanDest = null" class="w-full py-2 border border-yellow-900 rounded text-sm">Zrušit</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="notifbox" class="fixed bottom-20 left-4 w-80 flex flex-col-reverse gap-2 pointer-events-none z-[200]">
+        <template x-for="n in GAME.notifications" :key="n.id">
+            <div class="p-3 dark-panel rounded shadow-lg flex items-center space-x-3 text-xs pointer-events-auto notif-item" :class="n.stateClass">
+                <div class="w-2 h-2 rounded-full shrink-0" :class="notifDotClass(n.type)"></div>
+                <div x-text="n.text"></div>
+            </div>
+        </template>
+    </div>
+
+    <button @click="showStory = !showStory" class="fixed bottom-20 left-4 w-10 h-10 bg-yellow-700 text-white rounded-full flex items-center justify-center shadow-lg hover:bg-yellow-600 transition-colors z-40">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
+    </button>
+
+    <div class="tile-tooltip" x-show="GAME.hoverTooltip.visible" x-cloak :style="tooltipStyle()">
+        <div class="font-bold text-[10px]" x-text="GAME.hoverTooltip.title"></div>
+        <div class="text-[10px] opacity-80" x-show="GAME.hoverTooltip.resource" x-text="GAME.hoverTooltip.resource"></div>
+    </div>
+
+    <div class="fixed bottom-0 left-0 w-full flex h-16 pointer-events-auto z-40">
+        <button @click="setMode('explore')" :class="actionButtonClass('explore')">
+            <span>PRŮZKUM</span>
+            <span class="action-hint">[E]</span>
+        </button>
+        <button @click="setMode('caravan')" :class="actionButtonClass('caravan')">
+            <span>KARAVANA</span>
+            <span class="action-hint">[K]</span>
+        </button>
+        <button @click="setMode('build')" :class="actionButtonClass('build')">
+            <span>STAVBA</span>
+            <span class="action-hint">[B]</span>
+        </button>
+        <button @click="setMode('tech')" :class="actionButtonClass('tech')">
+            <span>TECH STROM</span>
+            <span class="action-hint">[T]</span>
+        </button>
+        <button @click="setMode('trade')" :class="actionButtonClass('trade')">
+            <span>OBCHOD</span>
+            <span class="action-hint">[O]</span>
+        </button>
+        <div class="flex-[1.5] action-end-turn-shell">
+            <button x-show="!GAME.pendingEndTurn" @click="requestAdvanceTurn()" class="btn-crimson w-full h-full flex flex-col items-center justify-center font-bold text-lg">
+                <span>KONEC TAHU</span>
+                <span class="action-hint text-yellow-100/70">[SPACE]</span>
+            </button>
+            <div x-show="GAME.pendingEndTurn" class="confirm-turn-row">
+                <button @click="confirmAdvanceTurn()" class="confirm-turn-btn confirm-turn-yes">Opravdu? ANO</button>
+                <button @click="cancelAdvanceTurn()" class="confirm-turn-btn confirm-turn-no">NE</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
