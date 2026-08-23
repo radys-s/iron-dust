@@ -6,7 +6,7 @@ extends SceneTree
 ##
 ## godot --headless --path . --script res://scripts/dev/economy_test.gd
 
-const EXPECTED_CHECKS := 43
+const EXPECTED_CHECKS := 52
 
 var _failures := 0
 var _ran := 0
@@ -22,6 +22,7 @@ func _initialize() -> void:
 	_test_consumption(gs)
 	_test_clamping(gs)
 	_test_tech_gating(gs)
+	_test_ownership_layers(gs)
 	_test_turn(gs)
 
 	print("")
@@ -75,6 +76,12 @@ func _buildings(entries: Array) -> Array[Dictionary]:
 
 
 func _fresh_map(gs) -> void:
+	# The ownership and settlement layers must start empty: this suite asserts the
+	# prototype's numbers, which the Phase 3 layers only ever add to.
+	gs.owned = {}
+	gs.settlements = {}
+	gs.used_actions = {}
+
 	# 3 prairie (food 3), 2 owned (food 2 + wood 1), 1 mine (iron 8, coal 5),
 	# 1 river (food 2), 1 town (gold 15), 2 railway (gold 5).
 	gs.load_tiles({
@@ -235,8 +242,51 @@ func _test_tech_gating(gs) -> void:
 	gs.tech_points = 0
 
 
+## Phase 3 adds two layers on top of the ported economy: a toll on claimed land
+## and the output/upkeep of settlements. Neither may disturb the base numbers.
+func _test_ownership_layers(gs) -> void:
+	print("\n[7] Zabor a sidla")
+	_fresh_map(gs)
+	gs.researched_techs = _no_techs()
+	gs.buildings = _no_buildings()
+	gs.population = 1240
+	gs.reputation["soldiers"] = 72
+
+	var eco = gs.calculate_economy()
+	_check("bez zaboru zlato jako v prototypu", eco["gross"]["gold"], 25)
+
+	# Dul neni "inherently owned", takze zabor pridava mytne.
+	var toll: int = GameData.CLAIM_BONUS["gold"]
+	gs.owned = {Vector2i(2, 1): true}
+	eco = gs.calculate_economy()
+	_check("zabrany dul pridava mytne", eco["gross"]["gold"], 25 + toll)
+	_check("mytne je vykazane zvlast", eco["claim_income"]["gold"], toll)
+
+	# Uz vlastnene uzemi ma vlastni vynos, mytne se nescita dvakrat.
+	gs.owned = {Vector2i(0, 1): true}
+	eco = gs.calculate_economy()
+	_check("zabor OWNED dlazdice nic nepridava", eco["gross"]["gold"], 25)
+
+	gs.owned = {}
+	gs.settlements = {Vector2i(0, 1): 2}
+	eco = gs.calculate_economy()
+	# Kolonie: produkce food 4 + gold 4, udrzba 2 urovne * 5 = 10.
+	_check("sidlo pridava zlato", eco["gross"]["gold"], 29)
+	_check("sidlo pridava jidlo", eco["gross"]["food"], 19)
+	_check("udrzba sidla + zoldneri", eco["consumption"]["gold"], 30)
+
+	# Parni stroj nasobi jen budovy, ne sidla.
+	gs.researched_techs = _techs("steam")
+	eco = gs.calculate_economy()
+	_check("steam nenasobi produkci sidel", eco["settlement_production"]["gold"], 4)
+
+	gs.researched_techs = _no_techs()
+	gs.settlements = {}
+	gs.owned = {}
+
+
 func _test_turn(gs) -> void:
-	print("\n[7] Prubeh tahu")
+	print("\n[8] Prubeh tahu")
 	_fresh_map(gs)
 	gs.buildings = _no_buildings()
 	gs.researched_techs = _no_techs()
@@ -271,7 +321,8 @@ func _test_turn(gs) -> void:
 	gs.advance_turn()
 	_check("tech body s forge (+4)", gs.tech_points, 4)
 
-	print("\n[8] Dostavnik")
+	print("\n[9] Dostavnik")
+	gs.coach_stay = 0
 	gs.coach_in = 1
 	var gold_before: int = gs.resources["gold"]
 	var pop_before: int = gs.population
@@ -279,4 +330,5 @@ func _test_turn(gs) -> void:
 	gs.advance_turn()
 	_check("dostavnik pridal populaci", gs.population >= pop_before + GameData.COACH_POPULATION, true)
 	_check("dostavnik prenastavil odpocet", gs.coach_in >= 2 and gs.coach_in <= 4, true)
+	_check("dostavnik otevrel trh", gs.market_open(), true)
 	print("       (gold pred %d, po %d - zahrnuje i produkci a event)" % [gold_before, gs.resources["gold"]])

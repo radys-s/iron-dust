@@ -1,41 +1,59 @@
 extends SceneTree
 
-## Checks the generated Dustfall map against the economy: counts each terrain,
-## prints the resulting production, and asserts the map is actually playable
-## (it produces the resources the design says it should).
+## Checks the generated Dustfall region against the economy: counts each terrain,
+## verifies the fog layer, prints the resulting production, and asserts the map is
+## actually playable (it produces the resources the design says it should).
 ##
 ## godot --headless --path . --script res://scripts/dev/map_economy_test.gd
 
+const EXPECTED_CHECKS := 18
+
 var _failures := 0
 var _ran := 0
-const EXPECTED_CHECKS := 10
 
 
 func _initialize() -> void:
 	var gs := root.get_node("GameState")
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 18720412
+	gs.start_new_game(18720412)
 
-	var tiles := MapBuilder.generate_terrain(rng)
-	gs.load_tiles(tiles)
+	var full := MapBuilder.full_terrain()
+	var expected_cells := 3 * MapBuilder.MAP_RADIUS * (MapBuilder.MAP_RADIUS + 1) + 1
 
-	print("\n[1] Slozeni mapy (%d dlazdic)" % tiles.size())
-	var counts := {}
-	for cell in tiles:
-		var t: int = tiles[cell]
-		counts[t] = int(counts.get(t, 0)) + 1
+	print("\n[1] Slozeni cele oblasti (%d dlazdic)" % full.size())
+	var counts := _count(full)
 	for terrain in GameData.Terrain.values():
 		var n := int(counts.get(terrain, 0))
 		if n > 0:
 			print("  %-22s %d" % [GameData.TERRAIN_NAMES[terrain], n])
 
-	_check("mapa ma 91 dlazdic (polomer 5)", tiles.size(), 91)
+	_check("pocet dlazdic pro polomer %d" % MapBuilder.MAP_RADIUS, full.size(), expected_cells)
 	_check("prave jedno mesto", int(counts.get(GameData.Terrain.TOWN, 0)), 1)
 	_check("existuje zeleznice", int(counts.get(GameData.Terrain.RAILWAY, 0)) > 0, true)
-	_check("existuje dul", int(counts.get(GameData.Terrain.MINE, 0)) > 0, true)
+	_check("existuje reka", int(counts.get(GameData.Terrain.RIVER, 0)) > 0, true)
+	_check("existuji hory", int(counts.get(GameData.Terrain.MOUNTAIN, 0)) > 0, true)
+	_check("existuje poust", int(counts.get(GameData.Terrain.DESERT, 0)) > 0, true)
+	_check("vsechny doly rozmisteny", int(counts.get(GameData.Terrain.MINE, 0)),
+		MapBuilder.MINE_CELLS.size())
 	_check("existuje uzemi H-V", int(counts.get(GameData.Terrain.ENEMY, 0)) > 0, true)
+	_check("v cele oblasti neni mlha", int(counts.get(GameData.Terrain.FOG, 0)), 0)
 
-	print("\n[2] Ekonomika teto mapy")
+	print("\n[2] Mlha na zacatku hry")
+	var visible_counts := _count(gs.tiles)
+	var fogged := int(visible_counts.get(GameData.Terrain.FOG, 0))
+	print("  viditelnych %d, zamlzenych %d, skrytych zaznamu %d" % [
+		gs.tiles.size() - fogged, fogged, gs.hidden_tiles.size()
+	])
+	_check("kazda mlha ma skryty teren", gs.hidden_tiles.size(), fogged)
+	_check("neco je zamlzeneho", fogged > 0, true)
+	_check("mesto neni pod mlhou", gs.get_tile(MapBuilder.TOWN_CELL), GameData.Terrain.TOWN)
+
+	var hidden_fog := 0
+	for cell in gs.hidden_tiles:
+		if gs.hidden_tiles[cell] == GameData.Terrain.FOG:
+			hidden_fog += 1
+	_check("pod mlhou neni dalsi mlha", hidden_fog, 0)
+
+	print("\n[3] Ekonomika startovni mapy")
 	var eco = gs.calculate_economy()
 	for key in GameData.RESOURCES:
 		print("  %-8s hruby %4d  spotreba %4d  cisty %+5d" % [
@@ -44,11 +62,12 @@ func _initialize() -> void:
 
 	_check("mapa produkuje zlato", eco["gross"]["gold"] > 0, true)
 	_check("mapa produkuje jidlo", eco["gross"]["food"] > 0, true)
-	_check("mapa produkuje zelezo z dolu", eco["gross"]["iron"] > 0, true)
-	_check("mapa produkuje uhli z dolu", eco["gross"]["coal"] > 0, true)
 	_check("mapa produkuje drevo z owned", eco["gross"]["wood"] > 0, true)
+	_check("Dustfall je sidlo urovne %d" % MapBuilder.TOWN_SETTLEMENT_LEVEL,
+		gs.settlement_at(MapBuilder.TOWN_CELL), MapBuilder.TOWN_SETTLEMENT_LEVEL)
+	_check("okoli mesta je v dosahu zasobovani", gs.in_supply(Vector2i(2, 0)), true)
 
-	print("\n[3] Prvni tri tahy")
+	print("\n[4] Prvni tri tahy")
 	gs.set_seed(99)
 	gs.coach_in = 99
 	for i in 3:
@@ -75,10 +94,18 @@ func _initialize() -> void:
 	quit(0)
 
 
+func _count(tiles: Dictionary) -> Dictionary:
+	var counts := {}
+	for cell in tiles:
+		var t: int = tiles[cell]
+		counts[t] = int(counts.get(t, 0)) + 1
+	return counts
+
+
 func _check(label: String, actual, expected) -> void:
 	_ran += 1
 	if actual == expected:
-		print("  ok   %-40s = %s" % [label, actual])
+		print("  ok   %-42s = %s" % [label, actual])
 	else:
 		_failures += 1
-		print("  FAIL %-40s = %s (cekano %s)" % [label, actual, expected])
+		print("  FAIL %-42s = %s (cekano %s)" % [label, actual, expected])

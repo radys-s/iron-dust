@@ -1,48 +1,69 @@
 extends Node3D
 
-## Main play scene: owns the 3D world (terrain, props, lighting, selection ring)
-## and wires tile clicks to GameState / the HUD.
+## Main play scene: owns the 3D world (terrain, props, structures, lighting,
+## selection ring) and wires tile clicks to GameState and the HUD.
 
 const MAP_SEED := 18720412
 
 @onready var _rig: IsoCameraRig = $CameraRig
 @onready var _hud: CanvasLayer = $GameHUD
 
-var _terrain_root: Node3D
-var _prop_root: Node3D
+var _world: Node3D
 var _highlight: MeshInstance3D
+var _placement_root: Node3D
 var _selected: Vector2i = Vector2i.MAX
-var _rng := RandomNumberGenerator.new()
+
+## Building waiting to be placed, or "" when not in placement mode.
+var _pending_building := ""
 
 
 func _ready() -> void:
-	_rng.seed = MAP_SEED
-	GameState.set_seed(MAP_SEED)
-
 	_build_environment()
-	_build_roots()
+
+	_world = Node3D.new()
+	_world.name = "World"
+	add_child(_world)
+
+	_placement_root = Node3D.new()
+	_placement_root.name = "PlacementHints"
+	add_child(_placement_root)
+
 	_build_highlight()
 
-	GameState.load_tiles(MapBuilder.generate_terrain(_rng))
-	MapBuilder.render(GameState.tiles, _terrain_root, _prop_root, _rng)
+	GameState.start_new_game(MAP_SEED)
+	MapBuilder.render(GameState, _world)
 
 	GameState.map_changed.connect(_on_map_changed)
-	GameState.add_story("Přijezd do Dustfallu. Otevřena dopravní stanice.")
+	GameState.game_loaded.connect(_on_game_loaded)
+	_hud.build_requested.connect(_begin_placement)
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton \
-			and event.button_index == MOUSE_BUTTON_LEFT \
-			and event.pressed:
-		_select_at(event.position)
+	if event is InputEventKey and event.pressed and not event.echo \
+			and event.keycode == KEY_ESCAPE and _pending_building != "":
+		_cancel_placement()
+		return
+
+	if event is InputEventMouseButton and event.pressed:
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			_click_at(event.position)
+		elif event.button_index == MOUSE_BUTTON_RIGHT and _pending_building != "":
+			_cancel_placement()
 
 
-func _select_at(screen_pos: Vector2) -> void:
+func _click_at(screen_pos: Vector2) -> void:
 	var ground := _rig.screen_to_ground(screen_pos)
 	if ground == Vector3.INF:
 		return
-
 	var cell := HexGrid.world_to_axial(ground)
+
+	if _pending_building != "":
+		_try_place(cell)
+		return
+	_select(cell)
+
+
+func _select(cell: Vector2i) -> void:
 	if not GameState.tiles.has(cell):
 		_selected = Vector2i.MAX
 		_highlight.visible = false
@@ -50,25 +71,108 @@ func _select_at(screen_pos: Vector2) -> void:
 		return
 
 	_selected = cell
+	_move_highlight(cell)
+	_hud.show_tile(cell)
+
+
+func _move_highlight(cell: Vector2i) -> void:
 	var center := HexGrid.axial_to_world(cell.x, cell.y)
 	_highlight.position = center + Vector3(0.0, TileCatalog.TILE_TOP_Y + 0.02, 0.0)
 	_highlight.visible = true
-	_hud.show_tile(cell, GameState.get_tile(cell))
 
+
+# --- Placement mode ----------------------------------------------------------
+
+func _begin_placement(building_name: String) -> void:
+	_pending_building = building_name
+	_show_placement_hints()
+	GameState.notify("Vyberte dlaždici pro stavbu: %s (Esc zruší)" % building_name, "info")
+
+
+func _cancel_placement() -> void:
+	if _pending_building == "":
+		return
+	_pending_building = ""
+	_clear_placement_hints()
+	GameState.notify("Stavba zrušena.", "info")
+
+
+func _try_place(cell: Vector2i) -> void:
+	var building_name := _pending_building
+	if not GameState.tiles.has(cell):
+		return
+
+	var placement: Dictionary = GameState.can_build_at(cell)
+	if not bool(placement["ok"]):
+		GameState.notify(String(placement["reason"]), "warning")
+		return
+
+	# Leave placement mode first: a successful build re-renders the world, and a
+	# stale hint layer would survive that redraw.
+	_pending_building = ""
+	_clear_placement_hints()
+
+	if GameState.build(building_name, cell):
+		_select(cell)
+
+
+## Marks every hex the pending building could legally go on.
+func _show_placement_hints() -> void:
+	_clear_placement_hints()
+
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = HexGrid.HEX_RADIUS * 0.82
+	mesh.bottom_radius = HexGrid.HEX_RADIUS * 0.82
+	mesh.height = 0.02
+	mesh.radial_segments = 6
+
+	var mat := StandardMaterial3D.new()
+	# Cyan, not green: buildable land *is* green pasture, and a green overlay on
+	# it was invisible.
+	mat.albedo_color = Color(0.35, 0.85, 1.0, 0.55)
+	mat.emission_enabled = true
+	mat.emission = Color(0.30, 0.75, 0.95)
+	mat.emission_energy_multiplier = 1.4
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mesh.material = mat
+
+	for cell in GameState.tiles:
+		if not bool(GameState.can_build_at(cell)["ok"]):
+			continue
+		var hint := MeshInstance3D.new()
+		hint.mesh = mesh
+		var terrain: GameData.Terrain = GameState.tiles[cell]
+		var height := TileCatalog.rim_height(MapBuilder.TERRAIN_MESH[terrain]) + 0.03
+		hint.position = HexGrid.axial_to_world(cell.x, cell.y) + Vector3(0.0, height, 0.0)
+		# A 6-segment cylinder points along +X; Kenney's hexes are pointy-top.
+		hint.rotation.y = deg_to_rad(30.0)
+		_placement_root.add_child(hint)
+
+
+func _clear_placement_hints() -> void:
+	for child in _placement_root.get_children():
+		_placement_root.remove_child(child)
+		child.queue_free()
+
+
+# --- State signals -----------------------------------------------------------
 
 func _on_map_changed() -> void:
-	MapBuilder.render(GameState.tiles, _terrain_root, _prop_root, _rng)
+	MapBuilder.render(GameState, _world)
+	if _pending_building != "":
+		_show_placement_hints()
 
 
-func _build_roots() -> void:
-	_terrain_root = Node3D.new()
-	_terrain_root.name = "Terrain"
-	add_child(_terrain_root)
+func _on_game_loaded() -> void:
+	_cancel_placement()
+	_selected = Vector2i.MAX
+	_highlight.visible = false
+	_hud.hide_tile()
+	MapBuilder.render(GameState, _world)
 
-	_prop_root = Node3D.new()
-	_prop_root.name = "Props"
-	add_child(_prop_root)
 
+# --- World construction ------------------------------------------------------
 
 func _build_highlight() -> void:
 	var ring := TorusMesh.new()
