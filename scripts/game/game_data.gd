@@ -31,6 +31,7 @@ enum Terrain {
 	MOUNTAIN,
 	MINE,
 	ENEMY,
+	OCEAN,
 }
 
 const TERRAIN_NAMES := {
@@ -44,6 +45,7 @@ const TERRAIN_NAMES := {
 	Terrain.MOUNTAIN: "Pohoří",
 	Terrain.MINE: "Důl",
 	Terrain.ENEMY: "Harlan-Voss území",
+	Terrain.OCEAN: "Oceán",
 }
 
 const TERRAIN_DESCRIPTIONS := {
@@ -57,6 +59,7 @@ const TERRAIN_DESCRIPTIONS := {
 	Terrain.MOUNTAIN: "Těžko prostupný terén bohatý na rudu a strategické body.",
 	Terrain.MINE: "Průmyslový uzel pro těžbu uhlí a železa.",
 	Terrain.ENEMY: "Kontrolováno korporací Harlan-Voss. Vstup na vlastní nebezpečí.",
+	Terrain.OCEAN: "Nekonečné vody obklopující pevninu.",
 }
 
 ## Per-turn yield of a single tile. Terrain not listed here produces nothing.
@@ -352,6 +355,48 @@ const COMBAT_EFFECTS := {
 		"text": "Těžká porážka! Korporace přešla do protiútoku.",
 	},
 }
+
+# --- AI faction (Harlan-Voss) -------------------------------------------------
+
+## Korporace začíná bez pokladny a staví se na vlastní příjem (nezávisí na
+## dlaždicích jako u hráče — je to soukromá firma, ne osada). Nulový start je
+## záměrný: enemy_power()'s pokladní člen (viz combat.gd) by jinak hned v tahu 0
+## přidal sílu, kterou dosavadní boj (a testy proti němu) nepočítaly.
+const AI_STARTING_GOLD := 0
+const AI_BASE_INCOME_GOLD := 25
+
+## Kolik akcí (útok + expanze + růst sídel dohromady) smí AI provést za tah;
+## roste s počtem jejích sídel, aby tempo odpovídalo tomu, co si vybudovala.
+const AI_ACTIONS_MAX := 3
+## Stejné jako hráčův ATTACKS_PER_TURN — korporace není agresivnější než hráč sám.
+const AI_ATTACKS_PER_TURN := 1
+
+## Tuned against scripts/dev/playthrough_test.gd. At 40 gold/-3 min-advantage
+## Harlan-Voss reached and took Dustfall by turn 13 on pure random player play;
+## at 70/0 it still won by turn 39. Both were a chain reaction — every captured
+## cell instantly became next turn's new front line, and the random bot never
+## once researches a war tech to push back. Raised further so a raid can't be
+## funded every other turn.
+const AI_ATTACK_COST_GOLD := 120
+const AI_EXPAND_COST_GOLD := 50
+const AI_SETTLEMENT_FOUND_COST_GOLD := 220
+const AI_SETTLEMENT_UPGRADE_PER_LEVEL_GOLD := 180
+const AI_SETTLEMENT_MIN_SPACING := 2
+
+## Bojová podpora nejbližšího AI sídla v tomhle dosahu (zrcadlí
+## SETTLEMENT_SUPPORT_RANGE) a kolik zlata v pokladně dá +1 sílu.
+const AI_SUPPORT_RANGE := 2
+const AI_POWER_PER_GOLD := 40
+
+## AI nezaútočí, pokud by její výhoda (její síla mínus hráčova) byla nižší
+## než tohle — nevrhá se do boje, ve kterém je spíš poraženým.
+const AI_MIN_ATTACK_ADVANTAGE := 0
+
+## Dustfall samo je opevněná metropole, ne další farma — tohle je navíc
+## k jeho běžné obraně (posádka, reputace, sídlo). Bez toho by pád hlavního
+## města visel na jediném šťastném hodu kostkou, jakmile se k němu H-V
+## jednou probojuje; s tímhle je to skutečné obležení, ne formalita.
+const AI_TOWN_DEFENSE_BONUS := 30
 
 # --- Trade -------------------------------------------------------------------
 

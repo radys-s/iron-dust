@@ -11,7 +11,7 @@ extends SceneTree
 ##
 ## godot --headless --path . --script res://scripts/dev/playthrough_test.gd
 
-const EXPECTED_CHECKS := 9
+const EXPECTED_CHECKS := 15
 const TURNS := 60
 const ACTIONS_PER_TURN := 3
 const SEED := 18720412
@@ -27,14 +27,26 @@ func _initialize() -> void:
 	var gs := root.get_node("GameState")
 	_rng.seed = SEED
 	gs.start_new_game(SEED)
+	var starting_enemy_cells := _enemy_cell_count(gs)
 
 	print("\n[1] Prubeh %d tahu" % TURNS)
-	print("  tah | zlato  jidlo  zelezo | pop   | zabrano sidla budovy | mlha | kontrakty")
+	print("  tah | zlato  jidlo  zelezo | pop   | zabrano sidla budovy | mlha | kontrakty | H-V uzemi sidla")
 
+	var defeated_on_turn := -1
+	var victorious_on_turn := -1
 	for turn in TURNS:
 		_take_actions(gs)
 		gs.advance_turn()
 		_check_invariants(gs)
+		if gs.is_defeated or gs.is_victorious:
+			if gs.is_defeated:
+				defeated_on_turn = gs.turn_count
+				print("  Hra skoncila prohrou v tahu %d: %s" % [defeated_on_turn, gs.game_over_reason])
+			else:
+				victorious_on_turn = gs.turn_count
+				print("  Hra skoncila vitezstvim v tahu %d: %s" % [victorious_on_turn, gs.game_over_reason])
+			_print_row(gs)
+			break
 		if (turn + 1) % 10 == 0:
 			_print_row(gs)
 
@@ -42,6 +54,9 @@ func _initialize() -> void:
 	for id in _performed:
 		print("  %-10s %dx" % [id, int(_performed[id])])
 	print("  bitev celkem: %d" % int(_performed.get("attack", 0)))
+	print("  H-V uzemi: %d -> %d, H-V zakladny: %d" % [
+		starting_enemy_cells, _enemy_cell_count(gs), gs.ai_settlements.size()
+	])
 
 	print("\n[3] Invarianty")
 	_check("suroviny nikdy nesly do minusu", int(_violations.get("negative", 0)), 0)
@@ -57,8 +72,25 @@ func _initialize() -> void:
 		int(_violations.get("hidden_leak", 0)), 0)
 	_check("populace neklesla pod nulu", int(_violations.get("population", 0)), 0)
 
-	# Hra se musi opravdu rozjet, ne jen prezit bez chyby.
-	_check("hrac za %d tahu neco zabral" % TURNS, gs.owned.size() > 0, true)
+	_check("AI zdroje nikdy nesly do minusu", int(_violations.get("ai_negative", 0)), 0)
+	_check("zadne sidlo nekoliduje s AI zakladnou",
+		int(_violations.get("settlement_collision", 0)), 0)
+	_check("AI zakladna nestoji na hracove pude",
+		int(_violations.get("ai_settlement_on_player_land", 0)), 0)
+	_check("hracovo sidlo nestoji na uzemi H-V",
+		int(_violations.get("player_settlement_on_enemy_land", 0)), 0)
+	_check("budova nestoji na uzemi H-V",
+		int(_violations.get("building_on_enemy_land", 0)), 0)
+
+	# Hra se musi opravdu rozjet, ne jen prezit bez chyby — na obou stranach.
+	# Kontroluje se, ze k zaboru vubec doslo behem hry, ne ze hrac na konci
+	# neco vlastni: aktivni H-V muze i pasivne hrajicimu bota do posledniho
+	# tahu sebrat uplne vse krome mesta, a to je platny (tezky) prubeh, ne
+	# poruseny invariant.
+	_check("hrac za hru neco zabral", int(_performed.get("claim", 0)) > 0, true)
+	_check("Harlan-Voss za hru neco udelal",
+		gs.ai_settlements.size() > 0 or _enemy_cell_count(gs) > starting_enemy_cells
+			or defeated_on_turn > 0 or victorious_on_turn > 0, true)
 
 	print("")
 	if _ran < EXPECTED_CHECKS:
@@ -147,9 +179,35 @@ func _check_invariants(gs) -> void:
 		if gs.tiles.get(cell, GameData.Terrain.FOG) != GameData.Terrain.FOG:
 			_violate("hidden_leak")
 
+	for key in GameData.RESOURCES:
+		if int(gs.ai_resources.get(key, 0)) < 0:
+			_violate("ai_negative")
+
+	for cell in gs.ai_settlements:
+		if gs.settlements.has(cell):
+			_violate("settlement_collision")
+		if gs.is_owned(cell):
+			_violate("ai_settlement_on_player_land")
+
+	for cell in gs.settlements:
+		if gs.get_tile(cell) == GameData.Terrain.ENEMY:
+			_violate("player_settlement_on_enemy_land")
+
+	for building in gs.buildings:
+		if gs.get_tile(building["cell"]) == GameData.Terrain.ENEMY:
+			_violate("building_on_enemy_land")
+
 
 func _violate(key: String) -> void:
 	_violations[key] = int(_violations.get(key, 0)) + 1
+
+
+func _enemy_cell_count(gs) -> int:
+	var count := 0
+	for cell in gs.tiles:
+		if gs.tiles[cell] == GameData.Terrain.ENEMY:
+			count += 1
+	return count
 
 
 # --- Output ------------------------------------------------------------------
@@ -160,12 +218,13 @@ func _print_row(gs) -> void:
 		if gs.tiles[cell] == GameData.Terrain.FOG:
 			fogged += 1
 
-	print("  %4d | %6d %6d %6d | %5d | %7d %5d %6d | %4d | %d" % [
+	print("  %4d | %6d %6d %6d | %5d | %7d %5d %6d | %4d | %9d | %4d %d" % [
 		gs.turn_count,
 		int(gs.resources["gold"]), int(gs.resources["food"]), int(gs.resources["iron"]),
 		int(gs.population),
 		gs.owned.size(), gs.settlements.size(), gs.buildings.size(),
 		fogged, gs.contracts.size(),
+		_enemy_cell_count(gs), gs.ai_settlements.size(),
 	])
 
 

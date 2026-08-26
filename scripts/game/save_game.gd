@@ -9,7 +9,10 @@ extends RefCounted
 ## half-restoring a game.
 
 const SLOT_COUNT := 3
-const SAVE_VERSION := 1
+## Bumped for Phase 6 (difficulty modes). Same reject-not-migrate policy as
+## before: a pre-mode save has no ruleset, and quietly assuming "advanced"
+## could drop a Beginner player into a game that can now actually kill them.
+const SAVE_VERSION := 4
 
 
 static func slot_path(slot: int) -> String:
@@ -91,6 +94,12 @@ static func capture(gs) -> Dictionary:
 		"attacks_this_turn": gs.attacks_this_turn,
 		"map_seed": gs.map_seed,
 		"story_log": gs.story_log.duplicate(true),
+		"ai_resources": gs.ai_resources.duplicate(),
+		"ai_settlements": _cells_out(gs.ai_settlements),
+		"is_defeated": gs.is_defeated,
+		"is_victorious": gs.is_victorious,
+		"game_over_reason": gs.game_over_reason,
+		"mode": gs.mode,
 	}
 
 
@@ -139,6 +148,18 @@ static func restore(gs, data: Dictionary) -> bool:
 	gs.coach_stay = int(data.get("coach_stay", 0))
 	gs.attacks_this_turn = int(data.get("attacks_this_turn", 0))
 	gs.map_seed = int(data.get("map_seed", 0))
+
+	gs.ai_resources = _ints(data.get("ai_resources", {}))
+	gs.ai_settlements = _cells_in(data.get("ai_settlements", {}), true)
+	gs.is_defeated = bool(data.get("is_defeated", false))
+	gs.is_victorious = bool(data.get("is_victorious", false))
+	gs.game_over_reason = String(data.get("game_over_reason", ""))
+
+	# Pravidla se NEUKLADAJI, jen rezim — odvozuji se znovu pri nacteni, takze
+	# doladeni balancu plati i pro rozehrane hry misto aby v nich zamrzlo.
+	var saved_mode := String(data.get("mode", Ruleset.ADVANCED))
+	gs.mode = saved_mode if Ruleset.is_valid(saved_mode) else Ruleset.ADVANCED
+	gs.ruleset = Ruleset.for_mode(gs.mode)
 
 	var entries: Array[Dictionary] = []
 	for entry in data.get("story_log", []):

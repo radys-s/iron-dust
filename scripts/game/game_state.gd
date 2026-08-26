@@ -21,6 +21,7 @@ signal combat_resolved(report: Dictionary)
 signal contracts_changed()
 signal market_changed()
 signal game_loaded()
+signal game_over(reason: String)
 
 const STARTING_RESOURCES := {
 	"gold": 2340, "food": 480, "iron": 210, "wood": 95, "coal": 140, "salt": 62,
@@ -85,6 +86,38 @@ var last_combat: Dictionary = {}
 ## Battles fought since the turn began; reset by advance_turn().
 var attacks_this_turn := 0
 
+## Harlan-Voss' own ledger — same 6-key shape as the player's `resources` for
+## consistency, though only "gold" moves in Phase 4.
+var ai_resources: Dictionary = GameData.empty_resources()
+
+## Vector2i -> settlement level (1..4). Parallel to but never overlapping the
+## player's own `settlements`. AI territory itself is not tracked separately —
+## a cell belongs to Harlan-Voss iff its terrain is Terrain.ENEMY, see
+## is_ai_territory() — so there is no "ai_owned" dictionary to keep in sync.
+var ai_settlements: Dictionary = {}
+
+## Set once Dustfall falls, or once Harlan-Voss holds no territory at all.
+## Either flips this pair: advance_turn()/perform_action() become no-ops.
+var is_defeated := false
+var is_victorious := false
+var game_over_reason := ""
+
+## Rules this particular game runs under — see Ruleset. Always fully populated
+## by start_new_game(), never consulted with a fallback, so a forgotten key
+## fails loudly instead of silently reverting to a default.
+var mode := Ruleset.ADVANCED
+var ruleset: Dictionary = Ruleset.for_mode(Ruleset.ADVANCED)
+
+## Handover from the main menu, which runs in its own scene and cannot call
+## start_new_game() itself — the map has to be built by the play scene, after
+## its world node exists. game_scene.gd reads and clears these on _ready().
+var pending_mode := ""
+var pending_tutorial := false
+## 0 = start fresh; otherwise load this slot instead of generating a new map.
+var pending_load_slot := 0
+## True while the tutorial chapter is running (content lands in Etapa 4).
+var tutorial_active := false
+
 var _rng := RandomNumberGenerator.new()
 
 
@@ -102,8 +135,14 @@ func set_seed(value: int) -> void:
 
 ## Wipes everything back to turn zero and installs a fresh Dustfall basin.
 ## Used by the play scene on start-up and by "nová hra" in the save panel.
-func start_new_game(seed_value: int) -> void:
+func start_new_game(seed_value: int, game_mode: String = "") -> void:
 	set_seed(seed_value)
+
+	# Prazdny mod = ponechat stavajici. Diky tomu vsechny testy z Fazi 2-5,
+	# ktere volaji start_new_game(SEED), bezi dal na vychozich pravidlech.
+	if game_mode != "":
+		mode = game_mode if Ruleset.is_valid(game_mode) else Ruleset.ADVANCED
+	ruleset = Ruleset.for_mode(mode)
 
 	year = 1872
 	season = GameData.SEASONS[0]
@@ -129,6 +168,13 @@ func start_new_game(seed_value: int) -> void:
 	coach_stay = 0
 	last_combat = {}
 	attacks_this_turn = 0
+
+	ai_resources = GameData.empty_resources()
+	ai_resources["gold"] = GameData.AI_STARTING_GOLD
+	ai_settlements = {}
+	is_defeated = false
+	is_victorious = false
+	game_over_reason = ""
 
 	var map := MapBuilder.generate()
 	load_tiles(map["tiles"], map["hidden"])
@@ -223,6 +269,13 @@ func is_adjacent_to_owned(cell: Vector2i) -> bool:
 		if tiles.has(neighbor) and is_owned(neighbor):
 			return true
 	return false
+
+
+## A cell belongs to Harlan-Voss iff its terrain is ENEMY — true both for the
+## quadrant the map starts with and for anything since claimed or captured,
+## since both paths flip the cell's terrain to ENEMY. No separate ledger needed.
+func is_ai_territory(cell: Vector2i) -> bool:
+	return get_tile(cell) == GameData.Terrain.ENEMY
 
 
 func owned_cells() -> Array[Vector2i]:
@@ -430,6 +483,8 @@ func actions_for(cell: Vector2i) -> Array[Dictionary]:
 ## Single entry point for everything the tile panel can trigger. Overlay actions
 ## ("build", "trade") are refused here — the HUD opens a panel for those.
 func perform_action(id: String, cell: Vector2i) -> Dictionary:
+	if is_defeated or is_victorious:
+		return {"ok": false, "reason": "Hra skončila."}
 	if TileAction.is_overlay(id):
 		return {"ok": false, "reason": "Tuhle akci otevírá panel, ne přímé volání."}
 
@@ -590,6 +645,12 @@ func _do_attack(cell: Vector2i) -> Dictionary:
 	if bool(report["captures"]):
 		tiles[cell] = GameData.Terrain.OWNED
 		owned[cell] = true
+		# Symmetric to _capture_player_cell() erasing the player's settlement:
+		# a settlement Harlan-Voss founded here does not survive the tile
+		# changing hands, or it would go on contributing AI income/defense
+		# support from land that is no longer theirs.
+		ai_settlements.erase(cell)
+
 	elif bool(report["loses_tile"]):
 		var lost := _enemy_counterattack(cell)
 		report["lost_cell"] = lost
@@ -600,26 +661,176 @@ func _do_attack(cell: Vector2i) -> Dictionary:
 		report["name"], cell.x, cell.y, report["player_roll"], report["enemy_roll"]
 	])
 	combat_resolved.emit(report)
+	if bool(report["captures"]):
+		_check_victory()
 	return {"ok": true, "reason": "", "report": report}
 
 
-## After a rout Harlan-Voss takes the closest thing you own, structures and all.
+## After a rout Harlan-Voss takes the closest thing you own, structures and
+## all — an opportunistic grab with no roll of its own, since it is already the
+## consequence of one you just lost. Dustfall is excluded on purpose: a
+## garrisoned capital is not something that changes hands as a side effect of
+## a fight fought somewhere else on the map. It can still fall, but only to a
+## resolved assault that has to beat its own defense — see
+## _ai_attack_player_cell(), the only path that runs through Combat.resolve()
+## and therefore the only one AI_TOWN_DEFENSE_BONUS actually governs.
 func _enemy_counterattack(from_cell: Vector2i) -> Vector2i:
 	for neighbor in HexGrid.get_neighbors(from_cell.x, from_cell.y):
 		if not tiles.has(neighbor) or not is_owned(neighbor):
 			continue
-		if get_tile(neighbor) == GameData.Terrain.TOWN:
-			continue  # Dustfall sám nepadne — konec hry řeší až Fáze 4.
-		tiles[neighbor] = GameData.Terrain.ENEMY
-		owned.erase(neighbor)
-		settlements.erase(neighbor)
-		for i in range(buildings.size() - 1, -1, -1):
-			if buildings[i].get("cell", Vector2i.MAX) == neighbor:
-				buildings.remove_at(i)
-		notify("Harlan-Voss obsadil %d:%d!" % [neighbor.x, neighbor.y], "warning")
-		add_story("Korporace obsadila území %d:%d." % [neighbor.x, neighbor.y])
-		return neighbor
+		if neighbor == MapBuilder.TOWN_CELL:
+			continue
+		return _capture_player_cell(neighbor)
 	return Vector2i.MAX
+
+
+# --- AI faction (Harlan-Voss) --------------------------------------------------
+
+## Called once per advance_turn(). EnemyAI decides (a pure read of `self`); this
+## applies whatever it decided, exactly like perform_action() applies TileAction's
+## verdicts. Stops early if a step ends the game, so nothing fires post-defeat.
+func _run_ai_turn() -> void:
+	var plan := EnemyAI.run_turn(self)
+	ai_resources["gold"] = int(ai_resources.get("gold", 0)) + int(plan["income"])
+
+	var attacked := 0
+	var expanded := 0
+	var grew := 0
+
+	for action in plan["actions"]:
+		if is_defeated:
+			break
+		match String(action["kind"]):
+			"attack":
+				ai_resources["gold"] -= GameData.AI_ATTACK_COST_GOLD
+				_ai_attack_player_cell(action["cell"], action["launch_cell"])
+				attacked += 1
+			"expand":
+				ai_resources["gold"] -= GameData.AI_EXPAND_COST_GOLD
+				_ai_capture_wild(action["cell"])
+				expanded += 1
+			"found":
+				ai_resources["gold"] -= int(action["cost"])
+				_ai_found_settlement(action["cell"])
+				grew += 1
+			"upgrade":
+				ai_resources["gold"] -= int(action["cost"])
+				_ai_upgrade_settlement(action["cell"])
+				grew += 1
+
+	if attacked > 0 or expanded > 0 or grew > 0:
+		add_story("Harlan-Voss tento tah: %d útok, %d expanze, %d posílení základen." % [
+			attacked, expanded, grew
+		])
+
+
+## Harlan-Voss attacks a player-owned cell from one of its own (launch_cell).
+## Combat.resolve() always keeps the player in the defender slot, so the banner
+## and COMBAT_EFFECTS table read the same as a player-initiated attack; only
+## `loses_tile` (the AI's raid succeeding) has any effect here — a successful
+## defense does not "capture" a tile the player already owns.
+func _ai_attack_player_cell(target_cell: Vector2i, launch_cell: Vector2i) -> void:
+	var report := Combat.resolve(
+		Combat.player_power(self, target_cell),
+		Combat.enemy_power(self, launch_cell),
+		_rng,
+		false
+	)
+	report["cell"] = target_cell
+
+	apply_resource_bundle(report["resources"])
+	for track in report["reputation"]:
+		adjust_reputation(track, int(report["reputation"][track]))
+
+	if bool(report["loses_tile"]):
+		_capture_player_cell(target_cell)
+	else:
+		notify("Harlan-Voss zaútočil na %d:%d, ale ubránili jsme se (%d proti %d)." % [
+			target_cell.x, target_cell.y, report["player_roll"], report["enemy_roll"]
+		], "success")
+		add_story("Harlan-Voss zaútočil na %d:%d — ubránili jsme se." % [target_cell.x, target_cell.y])
+
+	last_combat = report
+	combat_resolved.emit(report)
+
+
+## Shared by both the reactive counterattack and the proactive AI attack — the
+## single place a player cell actually changes hands. Capturing TOWN ends the
+## game instead of being skipped, unlike before Phase 4.
+func _capture_player_cell(cell: Vector2i) -> Vector2i:
+	# Pojistka k témuž pravidlu v EnemyAI._pick_attack_target(): v Začátečníkovi
+	# Dustfall padnout nesmí, protože to menu výslovně slibuje. Hlídá se to na
+	# obou místech schválně — plánovač AI je jen jedna ze dvou cest, kterými se
+	# dlaždice může přehodit, a slib daný hráči nemá viset na jedné z nich.
+	if cell == MapBuilder.TOWN_CELL and not bool(ruleset["ai_can_capture_town"]):
+		return Vector2i.MAX
+
+	tiles[cell] = GameData.Terrain.ENEMY
+	owned.erase(cell)
+	settlements.erase(cell)
+	for i in range(buildings.size() - 1, -1, -1):
+		if buildings[i].get("cell", Vector2i.MAX) == cell:
+			buildings.remove_at(i)
+	notify("Harlan-Voss obsadil %d:%d!" % [cell.x, cell.y], "warning")
+	add_story("Korporace obsadila území %d:%d." % [cell.x, cell.y])
+	if cell == MapBuilder.TOWN_CELL:
+		_trigger_defeat()
+	return cell
+
+
+func _trigger_defeat() -> void:
+	if is_defeated:
+		return
+	is_defeated = true
+	game_over_reason = "Harlan-Voss dobyl Dustfall. Vaše impérium v Nevadě padlo."
+	notify(game_over_reason, "warning")
+	add_story(game_over_reason)
+	game_over.emit(game_over_reason)
+
+
+## The only thing that can shrink Harlan-Voss's territory to nothing is the
+## player winning an attack (EnemyAI only ever expands into wilderness or
+## the player's own land, never gives ground back) — so this is the only
+## call site that needs to check it.
+func _check_victory() -> void:
+	if is_defeated or is_victorious:
+		return
+	if _enemy_tile_count() > 0:
+		return
+	is_victorious = true
+	game_over_reason = "Harlan-Voss byl vyhnán z Nevady. Dustfall je vaše."
+	notify(game_over_reason, "success")
+	add_story(game_over_reason)
+	game_over.emit(game_over_reason)
+
+
+func _enemy_tile_count() -> int:
+	var count := 0
+	for cell in tiles:
+		if tiles[cell] == GameData.Terrain.ENEMY:
+			count += 1
+	return count
+
+
+func _ai_capture_wild(cell: Vector2i) -> void:
+	var terrain := get_tile(cell)
+	tiles[cell] = GameData.Terrain.ENEMY
+	notify("Harlan-Voss rozšířil území na %d:%d." % [cell.x, cell.y], "warning")
+	add_story("Korporace zabrala divočinu na %d:%d (%s)." % [cell.x, cell.y, GameData.TERRAIN_NAMES[terrain]])
+
+
+func _ai_found_settlement(cell: Vector2i) -> void:
+	ai_settlements[cell] = 1
+	notify("Harlan-Voss založil základnu na %d:%d." % [cell.x, cell.y], "warning")
+	add_story("Korporace založila základnu na %d:%d." % [cell.x, cell.y])
+
+
+func _ai_upgrade_settlement(cell: Vector2i) -> void:
+	var level := int(ai_settlements.get(cell, 1)) + 1
+	ai_settlements[cell] = level
+	var data := GameData.settlement_data(level)
+	notify("Harlan-Voss posílil základnu na %d:%d (%s)." % [cell.x, cell.y, data["name"]], "warning")
+	add_story("Základna Harlan-Voss na %d:%d byla posílena na úroveň %s." % [cell.x, cell.y, data["name"]])
 
 
 # --- Buildings ---------------------------------------------------------------
@@ -770,6 +981,9 @@ func adjust_reputation(track: String, delta: int) -> void:
 # --- Turn --------------------------------------------------------------------
 
 func advance_turn() -> void:
+	if is_defeated or is_victorious:
+		return
+
 	var season_index := GameData.SEASONS.find(season) + 1
 	if season_index >= GameData.SEASONS.size():
 		season_index = 0
@@ -785,6 +999,7 @@ func advance_turn() -> void:
 	_tick_market()
 	_tick_contracts()
 	_trigger_random_event()
+	_run_ai_turn()
 
 	refresh_economy()
 	notify("Tah dokončen. Nyní je %s %d." % [season, year], "info")

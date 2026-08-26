@@ -14,11 +14,14 @@ const CRUSHING_MARGIN := 6
 const ROUT_MARGIN := -6
 
 
-## Base strength the player brings to a fight for `cell`.
+## Base strength the player brings to a fight for `cell`. Dustfall itself
+## carries a flat capital-defense bonus on top of everything else — the
+## difference between an outlying claim and the seat of the whole operation.
 static func player_power(gs, cell: Vector2i) -> int:
 	var from_reputation := int(gs.reputation.get("soldiers", 0)) / GameData.COMBAT_REPUTATION_DIVISOR
 	var from_tech: int = gs.tech_combat_power()
-	return from_reputation + from_tech + settlement_support(gs, cell)
+	var from_capital := GameData.AI_TOWN_DEFENSE_BONUS if cell == MapBuilder.TOWN_CELL else 0
+	return from_reputation + from_tech + settlement_support(gs, cell) + from_capital
 
 
 ## Best defensive bonus of a player settlement close enough to send men.
@@ -32,13 +35,30 @@ static func settlement_support(gs, cell: Vector2i) -> int:
 	return best
 
 
-## Harlan-Voss digs in further from town and grows stronger as the game runs on.
+## Harlan-Voss digs in further from town, grows stronger as the game runs on,
+## and — since Phase 4 — draws extra muscle from its own settlements and treasury.
 static func enemy_power(gs, cell: Vector2i) -> int:
 	var distance := HexGrid.distance(cell, MapBuilder.TOWN_CELL)
 	var escalation := int(gs.turn_count) / GameData.ENEMY_POWER_PER_TURNS
+	var from_settlements := ai_settlement_support(gs, cell)
+	var from_treasury := int(gs.ai_resources.get("gold", 0)) / GameData.AI_POWER_PER_GOLD
 	return GameData.ENEMY_BASE_POWER \
 		+ distance * GameData.ENEMY_POWER_PER_DISTANCE \
-		+ escalation
+		+ escalation \
+		+ from_settlements \
+		+ from_treasury
+
+
+## Best defensive bonus of an AI settlement close enough to send men. Mirrors
+## settlement_support() but reads gs.ai_settlements instead of gs.settlements.
+static func ai_settlement_support(gs, cell: Vector2i) -> int:
+	var best := 0
+	for settlement_cell in gs.ai_settlements:
+		if HexGrid.distance(settlement_cell, cell) > GameData.AI_SUPPORT_RANGE:
+			continue
+		var level := int(gs.ai_settlements[settlement_cell])
+		best = maxi(best, int(GameData.settlement_data(level).get("defense", 0)))
+	return best
 
 
 ## Rolls the battle. Returns everything the UI needs to explain what happened.

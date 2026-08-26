@@ -9,7 +9,7 @@ extends SceneTree
 ##
 ## godot --headless --path . --script res://scripts/dev/save_test.gd
 
-const EXPECTED_CHECKS := 45
+const EXPECTED_CHECKS := 51
 const SEED := 18720412
 const SLOT := 3
 
@@ -85,15 +85,27 @@ func _build_interesting_state(gs) -> void:
 	gs.resources["gold"] = 9000
 	gs.resources["wood"] = 400
 
-	gs.perform_action("claim", Vector2i(3, -1))
-	gs.perform_action("claim", Vector2i(4, -1))
-	gs.perform_action("explore", Vector2i(5, -1))
-	gs.perform_action("found", Vector2i(4, -1))
-	gs.perform_action("claim", Vector2i(1, 0))
-	gs.perform_action("repair", Vector2i(1, 0))
+	# Zadrátované souřadnice tady dřív tiše přestaly platit, jakmile Etapa 1c
+	# zvětšila VISIBLE_RADIUS a zorganičtila vlastněné území — hledáme proto
+	# cílové buňky dynamicky, stejný vzor jako actions_test.gd.
+	var claim_a := _find_claimable_prairie(gs)
+	gs.perform_action("claim", claim_a)
+	var claim_b := _find_claimable_prairie(gs)
+	gs.perform_action("claim", claim_b)
 
-	gs.build("Farma", Vector2i(1, 1))
-	gs.build("Sklad", Vector2i(0, 1))
+	var fog_cell := _find_adjacent_fog(gs)
+	gs.perform_action("explore", fog_cell)
+
+	gs.perform_action("found", claim_b)
+
+	var rail_cell := _find_claimable_railway(gs)
+	gs.perform_action("claim", rail_cell)
+	gs.perform_action("repair", rail_cell)
+
+	var build_a := _find_buildable_owned(gs, [])
+	gs.build("Farma", build_a)
+	var build_b := _find_buildable_owned(gs, [build_a])
+	gs.build("Sklad", build_b)
 
 	gs.tech_points = 6
 	gs.research("forge")
@@ -111,6 +123,43 @@ func _build_interesting_state(gs) -> void:
 		gs.turn_count, gs.tiles.size(), gs.owned.size(),
 		gs.settlements.size(), gs.buildings.size(), gs.contracts.size(),
 	])
+
+
+func _find_claimable_prairie(gs) -> Vector2i:
+	for cell in gs.tiles:
+		if gs.get_tile(cell) == GameData.Terrain.PRAIRIE and not gs.is_owned(cell) and gs.is_adjacent_to_owned(cell):
+			return cell
+	return Vector2i.MAX
+
+
+func _find_adjacent_fog(gs) -> Vector2i:
+	for cell in gs.tiles:
+		if gs.tiles[cell] == GameData.Terrain.FOG and gs.is_adjacent_to_owned(cell):
+			return cell
+	return Vector2i.MAX
+
+
+func _find_claimable_railway(gs) -> Vector2i:
+	for cell in gs.tiles:
+		if gs.get_tile(cell) == GameData.Terrain.RAILWAY and not gs.is_owned(cell) and gs.is_adjacent_to_owned(cell):
+			return cell
+	return Vector2i.MAX
+
+
+func _find_buildable_owned(gs, exclude: Array) -> Vector2i:
+	for cell in gs.tiles:
+		if exclude.has(cell):
+			continue
+		if gs.get_tile(cell) != GameData.Terrain.OWNED:
+			continue
+		if gs.settlement_at(cell) > 0:
+			continue
+		if not gs.building_at(cell).is_empty():
+			continue
+		if not gs.in_supply(cell):
+			continue
+		return cell
+	return Vector2i.MAX
 
 
 func _check(label: String, actual, expected) -> void:

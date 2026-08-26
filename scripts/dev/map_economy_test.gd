@@ -6,7 +6,7 @@ extends SceneTree
 ##
 ## godot --headless --path . --script res://scripts/dev/map_economy_test.gd
 
-const EXPECTED_CHECKS := 18
+const EXPECTED_CHECKS := 25
 
 var _failures := 0
 var _ran := 0
@@ -28,6 +28,7 @@ func _initialize() -> void:
 
 	_check("pocet dlazdic pro polomer %d" % MapBuilder.MAP_RADIUS, full.size(), expected_cells)
 	_check("prave jedno mesto", int(counts.get(GameData.Terrain.TOWN, 0)), 1)
+	_check("existuje oceán na okraji ostrova", int(counts.get(GameData.Terrain.OCEAN, 0)) > 0, true)
 	_check("existuje zeleznice", int(counts.get(GameData.Terrain.RAILWAY, 0)) > 0, true)
 	_check("existuje reka", int(counts.get(GameData.Terrain.RIVER, 0)) > 0, true)
 	_check("existuji hory", int(counts.get(GameData.Terrain.MOUNTAIN, 0)) > 0, true)
@@ -36,6 +37,34 @@ func _initialize() -> void:
 		MapBuilder.MINE_CELLS.size())
 	_check("existuje uzemi H-V", int(counts.get(GameData.Terrain.ENEMY, 0)) > 0, true)
 	_check("v cele oblasti neni mlha", int(counts.get(GameData.Terrain.FOG, 0)), 0)
+	_check("generovani mapy je deterministicke", MapBuilder.full_terrain().size() == full.size(), true)
+
+	# Etapa 1c audit: 4 kontroly, co zadani chtelo a puvodne nedostaly misto.
+	var ocean_near_edge := true
+	for cell in full:
+		if full[cell] == GameData.Terrain.OCEAN and HexGrid.distance(cell, MapBuilder.TOWN_CELL) < 13:
+			ocean_near_edge = false
+			break
+	_check("ocean je jen blizko okraje ostrova, nezasahuje hluboko dovnitr", ocean_near_edge, true)
+
+	var owned_count := int(counts.get(GameData.Terrain.OWNED, 0))
+	var core_disk_area := 3 * MapBuilder.OWNED_RADIUS_CORE * (MapBuilder.OWNED_RADIUS_CORE + 1) + 1
+	_check("vlastnene uzemi je vetsi nez ciste jadro (neni to pravidelny disk)",
+		owned_count > core_disk_area, true)
+
+	var full_again := MapBuilder.full_terrain()
+	var content_same := full_again.size() == full.size()
+	if content_same:
+		for cell in full:
+			if not full_again.has(cell) or full_again[cell] != full[cell]:
+				content_same = false
+				break
+	_check("generovani mapy je deterministicke i obsahem, ne jen poctem", content_same, true)
+
+	_check("zeleznice je klikata cesta, ne rovna cara",
+		_has_direction_change(MapBuilder.railway_cells()), true)
+	_check("reka je klikata cesta, ne rovna cara",
+		_has_direction_change(MapBuilder.river_cells()), true)
 
 	print("\n[2] Mlha na zacatku hry")
 	var visible_counts := _count(gs.tiles)
@@ -92,6 +121,16 @@ func _initialize() -> void:
 		return
 	print("VSE OK (%d kontrol)" % _ran)
 	quit(0)
+
+
+func _has_direction_change(cells: Array) -> bool:
+	var last_dir := Vector2i.ZERO
+	for i in range(1, cells.size()):
+		var d: Vector2i = cells[i] - cells[i - 1]
+		if last_dir != Vector2i.ZERO and d != last_dir:
+			return true
+		last_dir = d
+	return false
 
 
 func _count(tiles: Dictionary) -> Dictionary:

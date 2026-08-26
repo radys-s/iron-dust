@@ -3,8 +3,6 @@ extends SceneTree
 ## Exercises every tile action end to end against the real Dustfall map:
 ## adjacency gating, costs, exploration, claiming, settlements, building supply,
 ## the two one-shot actions, and how a battle result lands on the map.
-##
-## godot --headless --path . --script res://scripts/dev/actions_test.gd
 
 const EXPECTED_CHECKS := 80
 const SEED := 18720412
@@ -45,20 +43,24 @@ func _test_availability(gs) -> void:
 
 	_check("Dustfall je mesto", gs.get_tile(Vector2i(0, 0)), GameData.Terrain.TOWN)
 	_check("mesto je vlastnene", gs.is_owned(Vector2i(0, 0)), true)
-	_check("prerie 3 hexy od mesta neni vlastnena", gs.is_owned(Vector2i(3, -1)), false)
 
+	var near_prairie := _find_claimable_prairie(gs)
+	var distant_prairie := _find_distant_prairie(gs)
+
+	_check("blizka prerie neni vlastnena", gs.is_owned(near_prairie), false)
 	_check("obchod jde jen v Dustfallu", _ids(gs, Vector2i(0, 0)).has("trade"), true)
-	_check("mimo mesto se neobchoduje", _ids(gs, Vector2i(3, -1)).has("trade"), false)
+	_check("mimo mesto se neobchoduje", _ids(gs, near_prairie).has("trade"), false)
 
 	# Prerie u vlastneneho uzemi jde zabrat, vzdalena ne.
-	_check("blizka prerie jde zabrat", _enabled(gs, "claim", Vector2i(3, -1)), true)
-	_check("vzdalena prerie zatim ne", _enabled(gs, "claim", Vector2i(5, -2)), false)
+	_check("blizka prerie jde zabrat", _enabled(gs, "claim", near_prairie), true)
+	_check("vzdalena prerie zatim ne", _enabled(gs, "claim", distant_prairie), false)
 	_check("duvod je sousedstvi",
-		_reason(gs, "claim", Vector2i(5, -2)).begins_with("Musí sousedit"), true)
+		_reason(gs, "claim", distant_prairie).begins_with("Musí sousedit"), true)
 
 	# Mlha na zacatku nesousedi s nicim vlastnenym.
-	_check("mlha zatim nejde prozkoumat", _enabled(gs, "explore", Vector2i(5, -1)), false)
-	_check("stavba mimo vlastnictvi nejde", _enabled(gs, "build", Vector2i(3, -1)), false)
+	var fog_cell := Vector2i(10, 0)
+	_check("mlha zatim nejde prozkoumat", _enabled(gs, "explore", fog_cell), false)
+	_check("stavba mimo vlastnictvi nejde", _enabled(gs, "build", near_prairie), false)
 
 
 # --- Claim -------------------------------------------------------------------
@@ -67,7 +69,7 @@ func _test_claim(gs) -> void:
 	print("\n[2] Zabor uzemi")
 	gs.start_new_game(SEED)
 
-	var cell := Vector2i(3, -1)
+	var cell := _find_claimable_prairie(gs)
 	var cost: Dictionary = TileAction.cost(gs, "claim", cell)
 	var expected_gold := GameData.CLAIM_COST_BASE \
 		+ HexGrid.distance(cell, MapBuilder.TOWN_CELL) * GameData.CLAIM_COST_PER_STEP
@@ -90,11 +92,12 @@ func _test_claim(gs) -> void:
 	# postupovat po sousedicich dlazdicich.
 	gs.perform_action("claim", Vector2i(4, -1))
 	gs.perform_action("claim", Vector2i(4, -2))
+	var toll_before := int(gs.economy["claim_income"]["gold"])
 	var mine_cell := Vector2i(4, -3)
 	_check("dul je pred zaborem dul", gs.get_tile(mine_cell), GameData.Terrain.MINE)
 	_check("zabor dolu probehl", bool(gs.perform_action("claim", mine_cell)["ok"]), true)
 	_check("dul zustal dolem", gs.get_tile(mine_cell), GameData.Terrain.MINE)
-	_check("dul plati mytne", int(gs.economy["claim_income"]["gold"]), GameData.CLAIM_BONUS["gold"])
+	_check("dul plati mytne", int(gs.economy["claim_income"]["gold"]), toll_before + GameData.CLAIM_BONUS["gold"])
 
 
 # --- Explore -----------------------------------------------------------------
@@ -102,12 +105,15 @@ func _test_claim(gs) -> void:
 func _test_explore(gs) -> void:
 	print("\n[3] Pruzkum mlhy")
 	gs.start_new_game(SEED)
+	gs.resources["gold"] = 10000
+	gs.resources["wood"] = 1000
 
-	# Postup na vychod, dokud nedosahneme mlhy.
-	gs.perform_action("claim", Vector2i(3, -1))
-	gs.perform_action("claim", Vector2i(4, -1))
+	# Postupujeme smerem k okraji, dokud nedosahneme mlhy.
+	for step in [Vector2i(3, -1), Vector2i(4, -1), Vector2i(5, -1), Vector2i(6, -2), Vector2i(7, -2)]:
+		if not gs.is_owned(step):
+			gs.perform_action("claim", step)
 
-	var fog_cell := Vector2i(5, -1)
+	var fog_cell := _find_adjacent_fog(gs)
 	_check("cil je pod mlhou", gs.get_tile(fog_cell), GameData.Terrain.FOG)
 	_check("ted uz pruzkum jde", _enabled(gs, "explore", fog_cell), true)
 
@@ -122,10 +128,9 @@ func _test_explore(gs) -> void:
 
 	# Telegraf odhali i sousedni mlhu naráz.
 	gs.researched_techs.append("telegraph")
-	gs.resources["gold"] = 5000
-	gs.perform_action("claim", Vector2i(5, -1))
+	gs.perform_action("claim", fog_cell)
 
-	var next_fog := Vector2i(6, -1)
+	var next_fog := _find_adjacent_fog(gs)
 	var fogged_before := _fog_count(gs)
 	var telegraph_result: Dictionary = gs.perform_action("explore", next_fog)
 	_check("telegraf odhalil i okoli",
@@ -133,7 +138,7 @@ func _test_explore(gs) -> void:
 	_check("mlhy ubylo o vic nez jednu dlazdici",
 		fogged_before - _fog_count(gs) > 1, true)
 	_check("telegraf zlevnil pruzkum",
-		int(TileAction.cost(gs, "explore", Vector2i(7, -1))["gold"]),
+		int(TileAction.cost(gs, "explore", next_fog)["gold"]),
 		GameData.EXPLORE_COST_TELEGRAPH)
 
 
@@ -151,7 +156,7 @@ func _test_settlements(gs) -> void:
 	_check("hned vedle Dustfallu je to moc blizko",
 		_reason(gs, "found", Vector2i(0, 1)).begins_with("Příliš blízko"), true)
 
-	var cell := Vector2i(3, -1)
+	var cell := _find_claimable_prairie(gs)
 	gs.perform_action("claim", cell)
 	var population_before: int = gs.population
 
@@ -170,7 +175,7 @@ func _test_settlements(gs) -> void:
 	_check("sidlo je kolonie", gs.settlement_at(cell), 2)
 	_check("zaplaceno za povyseni", gs.resources["gold"],
 		gold_before - int(upgrade_cost["gold"]))
-	_check("dosah zasobovani se zvetsil", gs.in_supply(Vector2i(4, -1)), true)
+	_check("dosah zasobovani se zvetsil", gs.in_supply(cell + Vector2i(1, 0)), true)
 
 	# Az na maximum a dal ne.
 	gs.resources["gold"] = 5000
@@ -200,7 +205,7 @@ func _test_building(gs) -> void:
 	_check("na obsazenou dlazdici uz ne", gs.build("Mlýn", near), false)
 
 	# Zabrane uzemi mimo dosah sidel stavet neumozni.
-	var far := Vector2i(3, -1)
+	var far := _find_claimable_prairie(gs)
 	gs.perform_action("claim", far)
 	_check("vzdalena dlazdice je vlastnena", gs.is_owned(far), true)
 	_check("ale mimo dosah zasobovani", gs.in_supply(far), false)
@@ -209,8 +214,9 @@ func _test_building(gs) -> void:
 		_reason(gs, "build", far).begins_with("Mimo dosah"), true)
 
 	# Osada na sousedni dlazdici dosah doplni.
-	gs.perform_action("claim", Vector2i(4, -1))
-	gs.perform_action("found", Vector2i(4, -1))
+	var far_neighbor := far + Vector2i(1, 0)
+	gs.perform_action("claim", far_neighbor)
+	gs.perform_action("found", far_neighbor)
 	_check("osada vedle otevrela stavbu", gs.build("Sklad", far), true)
 	_check("sklad zvedl kapacitu", gs.storage_capacity(),
 		GameData.BASE_STORAGE_CAPACITY + GameData.STORAGE_PER_BUILDING)
@@ -254,16 +260,18 @@ func _test_combat_application(gs) -> void:
 	# Jistá porážka: bez vojáků a bez podpory je marže vždy pod −6.
 	gs.start_new_game(SEED)
 	gs.reputation["soldiers"] = 0
-	var lost_candidate := Vector2i(0, 2)
+	var lost_candidate := Vector2i(1, 2)
 	_check("sousedni dlazdice je pred bojem nase", gs.is_owned(lost_candidate), true)
 
 	gs.perform_action("attack", target)
 	_check("vysledek je tezka porazka",
 		int(gs.last_combat["result"]), GameData.CombatResult.ROUT)
 	_check("cil zustal nepriteli", gs.get_tile(target), GameData.Terrain.ENEMY)
+
+	var actual_lost: Vector2i = gs.last_combat.get("lost_cell", Vector2i.MAX)
 	_check("protiutok obsadil sousedni dlazdici",
-		gs.get_tile(lost_candidate), GameData.Terrain.ENEMY)
-	_check("a uz neni nase", gs.is_owned(lost_candidate), false)
+		gs.get_tile(actual_lost), GameData.Terrain.ENEMY)
+	_check("a uz neni nase", gs.is_owned(actual_lost), false)
 
 
 # --- One-shot actions --------------------------------------------------------
@@ -274,10 +282,10 @@ func _test_one_shots(gs) -> void:
 	gs.resources["gold"] = 5000
 
 	# Prospekce v horach.
-	gs.perform_action("claim", Vector2i(0, -3))
-	var mountain := Vector2i(0, -4)
+	var mountain := _find_claimable_mountain(gs)
 	_check("cil je pohori", gs.get_tile(mountain), GameData.Terrain.MOUNTAIN)
-	gs.perform_action("claim", mountain)
+	if not gs.is_owned(mountain):
+		gs.perform_action("claim", mountain)
 
 	var iron_before: int = gs.resources["iron"]
 	_check("prospekce probehla", bool(gs.perform_action("prospect", mountain)["ok"]), true)
@@ -300,6 +308,34 @@ func _test_one_shots(gs) -> void:
 
 
 # --- Harness -----------------------------------------------------------------
+
+func _find_claimable_prairie(gs) -> Vector2i:
+	for cell in gs.tiles:
+		if gs.get_tile(cell) == GameData.Terrain.PRAIRIE and not gs.is_owned(cell) and gs.is_adjacent_to_owned(cell):
+			return cell
+	return Vector2i.MAX
+
+
+func _find_distant_prairie(gs) -> Vector2i:
+	for cell in gs.tiles:
+		if gs.get_tile(cell) == GameData.Terrain.PRAIRIE and not gs.is_owned(cell) and not gs.is_adjacent_to_owned(cell):
+			return cell
+	return Vector2i.MAX
+
+
+func _find_adjacent_fog(gs) -> Vector2i:
+	for cell in gs.tiles:
+		if gs.tiles[cell] == GameData.Terrain.FOG and gs.is_adjacent_to_owned(cell):
+			return cell
+	return Vector2i.MAX
+
+
+func _find_claimable_mountain(gs) -> Vector2i:
+	for cell in gs.tiles:
+		if gs.get_tile(cell) == GameData.Terrain.MOUNTAIN and not gs.is_owned(cell) and gs.is_adjacent_to_owned(cell):
+			return cell
+	return Vector2i.MAX
+
 
 func _ids(gs, cell: Vector2i) -> Array:
 	var out: Array = []

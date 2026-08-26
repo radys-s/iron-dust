@@ -30,12 +30,34 @@ func _ready() -> void:
 
 	_build_highlight()
 
-	GameState.start_new_game(MAP_SEED)
+	_begin_session()
 	MapBuilder.render(GameState, _world)
 
 	GameState.map_changed.connect(_on_map_changed)
 	GameState.game_loaded.connect(_on_game_loaded)
 	_hud.build_requested.connect(_begin_placement)
+
+
+## Rozhodne, s cim se do sceny vstupuje: novou partii v rezimu zvolenem
+## v menu, nebo nactenym slotem. Menu bezi ve vlastni scene a nemuze partii
+## zalozit samo — mapa se musi postavit az tady, kdyz uz existuje `_world`.
+##
+## Predavaci pole se hned nuluji, aby dalsi navrat do teto sceny (nova hra
+## z overlaye konce hry) nezopakoval nactení stareho slotu.
+func _begin_session() -> void:
+	var slot := GameState.pending_load_slot
+	var mode := GameState.pending_mode
+	var tutorial := GameState.pending_tutorial
+
+	GameState.pending_load_slot = 0
+	GameState.pending_mode = ""
+	GameState.pending_tutorial = false
+
+	if slot > 0 and GameState.load_from_slot(slot):
+		return
+
+	GameState.start_new_game(MAP_SEED, mode)
+	GameState.tutorial_active = tutorial
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -49,13 +71,17 @@ func _unhandled_input(event: InputEvent) -> void:
 			_click_at(event.position)
 		elif event.button_index == MOUSE_BUTTON_RIGHT and _pending_building != "":
 			_cancel_placement()
+			# Pravé tlačítko je od Etapy 1b výhradně zrušení/kontext (kameru
+			# posouvá jen prostřední) — i tak si tenhle klik označíme jako
+			# zpracovaný, ať v budoucnu nikdo jiný neposlouchá stejné tlačítko.
+			get_viewport().set_input_as_handled()
 
 
 func _click_at(screen_pos: Vector2) -> void:
 	var ground := _rig.screen_to_ground(screen_pos)
 	if ground == Vector3.INF:
 		return
-	var cell := HexGrid.world_to_axial(ground)
+	var cell := HexGrid.world_to_axial(ground / MapBuilder.WORLD_SCALE)
 
 	if _pending_building != "":
 		_try_place(cell)
@@ -76,8 +102,8 @@ func _select(cell: Vector2i) -> void:
 
 
 func _move_highlight(cell: Vector2i) -> void:
-	var center := HexGrid.axial_to_world(cell.x, cell.y)
-	_highlight.position = center + Vector3(0.0, TileCatalog.TILE_TOP_Y + 0.02, 0.0)
+	var center := HexGrid.axial_to_world(cell.x, cell.y) * MapBuilder.WORLD_SCALE
+	_highlight.position = center + Vector3(0.0, (TileCatalog.TILE_TOP_Y + 0.02) * MapBuilder.WORLD_SCALE, 0.0)
 	_highlight.visible = true
 
 
@@ -121,9 +147,9 @@ func _show_placement_hints() -> void:
 	_clear_placement_hints()
 
 	var mesh := CylinderMesh.new()
-	mesh.top_radius = HexGrid.HEX_RADIUS * 0.82
-	mesh.bottom_radius = HexGrid.HEX_RADIUS * 0.82
-	mesh.height = 0.02
+	mesh.top_radius = HexGrid.HEX_RADIUS * 0.82 * MapBuilder.WORLD_SCALE
+	mesh.bottom_radius = HexGrid.HEX_RADIUS * 0.82 * MapBuilder.WORLD_SCALE
+	mesh.height = 0.02 * MapBuilder.WORLD_SCALE
 	mesh.radial_segments = 6
 
 	var mat := StandardMaterial3D.new()
@@ -143,8 +169,8 @@ func _show_placement_hints() -> void:
 		var hint := MeshInstance3D.new()
 		hint.mesh = mesh
 		var terrain: GameData.Terrain = GameState.tiles[cell]
-		var height := TileCatalog.rim_height(MapBuilder.TERRAIN_MESH[terrain]) + 0.03
-		hint.position = HexGrid.axial_to_world(cell.x, cell.y) + Vector3(0.0, height, 0.0)
+		var height := (TileCatalog.rim_height(MapBuilder.TERRAIN_MESH[terrain]) + 0.03) * MapBuilder.WORLD_SCALE
+		hint.position = HexGrid.axial_to_world(cell.x, cell.y) * MapBuilder.WORLD_SCALE + Vector3(0.0, height, 0.0)
 		# A 6-segment cylinder points along +X; Kenney's hexes are pointy-top.
 		hint.rotation.y = deg_to_rad(30.0)
 		_placement_root.add_child(hint)
@@ -176,8 +202,8 @@ func _on_game_loaded() -> void:
 
 func _build_highlight() -> void:
 	var ring := TorusMesh.new()
-	ring.inner_radius = HexGrid.HEX_RADIUS * 0.86
-	ring.outer_radius = HexGrid.HEX_RADIUS * 0.94
+	ring.inner_radius = HexGrid.HEX_RADIUS * 0.86 * MapBuilder.WORLD_SCALE
+	ring.outer_radius = HexGrid.HEX_RADIUS * 0.94 * MapBuilder.WORLD_SCALE
 	ring.rings = 6
 
 	var mat := StandardMaterial3D.new()
@@ -198,27 +224,38 @@ func _build_highlight() -> void:
 
 
 func _build_environment() -> void:
+	# Nízké odpolední slunce ze západu — dlouhé stíny čitelně modelují terén
+	# a je to hodina, kterou má western v hlavě.
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-52.0, -140.0, 0.0)
-	sun.light_energy = 1.15
-	sun.light_color = Color(1.0, 0.93, 0.79)
+	sun.rotation_degrees = Vector3(-42.0, -135.0, 0.0)
+	sun.light_energy = 1.45
+	sun.light_color = Color(1.0, 0.87, 0.68)
 	sun.shadow_enabled = true
 	add_child(sun)
 
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.13, 0.10, 0.08)
+	env.background_color = Color(0.105, 0.082, 0.065)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.58, 0.50, 0.42)
-	env.ambient_light_energy = 0.5
+	# Odražené světlo z prachu je teplé, ne neutrální — modré stíny by celý
+	# efekt vysušené krajiny zrušily.
+	env.ambient_light_color = Color(0.62, 0.50, 0.38)
+	env.ambient_light_energy = 0.45
 	env.fog_enabled = true
-	env.fog_light_color = Color(0.45, 0.34, 0.24)
-	env.fog_density = 0.004
-	# Kenney's palette is lush; pull it toward a sun-bleached 1872 Nevada.
+	env.fog_light_color = Color(0.52, 0.38, 0.26)
+	env.fog_density = 0.006
+	# Kenney maluje bujnou zeleň; tohle ji stáhne do vyprahlé Nevady roku 1872.
+	# Saturace níž než dřív (0.62) — na screenshotu byla krajina pořád smaragdová.
 	env.adjustment_enabled = true
-	env.adjustment_saturation = 0.62
-	env.adjustment_contrast = 1.08
-	env.adjustment_brightness = 1.04
+	env.adjustment_saturation = 0.42
+	env.adjustment_contrast = 1.14
+	env.adjustment_brightness = 1.02
+
+	# Jemné záření na mosazi v UI i na obrysech území; bez něj působí obraz plochý.
+	env.glow_enabled = true
+	env.glow_intensity = 0.22
+	env.glow_bloom = 0.05
+	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
 
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env

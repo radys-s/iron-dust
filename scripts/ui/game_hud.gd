@@ -28,11 +28,15 @@ var _tech_points_label: Label
 var _contract_label: Label
 var _notification_box: VBoxContainer
 
+const MinimapScript = preload("res://scripts/ui/minimap.gd")
+
 var _tile_panel: TilePanel
+var _minimap: Control
 var _tech_overlay: TechOverlay
 var _build_overlay: BuildOverlay
 var _trade_overlay: TradeOverlay
 var _save_overlay: SaveOverlay
+var _game_over_overlay: GameOverOverlay
 var _combat_banner: PanelContainer
 
 
@@ -40,12 +44,17 @@ func _ready() -> void:
 	_root = Control.new()
 	_root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Jedno prirazeni na koreni — Godot theme propaguje do celeho podstromu,
+	# takze se nastyluji i kontroly, ktere si nikdo rucne neupravuje. Presne
+	# tohle drív chybelo a proto mela vsechna tlacitka vychozi Godot skin.
+	_root.theme = UITheme.build_theme()
 	add_child(_root)
 
 	_build_ledger()
 	_build_tile_panel()
 	_build_action_bar()
 	_build_notifications()
+	_build_minimap()
 	_build_overlays()
 	_build_combat_banner()
 
@@ -57,6 +66,7 @@ func _ready() -> void:
 	GameState.contracts_changed.connect(_refresh_header)
 	GameState.combat_resolved.connect(_show_combat_banner)
 	GameState.game_loaded.connect(_on_game_loaded)
+	GameState.game_over.connect(_on_game_over)
 	# Child _ready() runs before the parent scene loads the map, so the first
 	# header would otherwise show the economy of an empty world.
 	GameState.map_changed.connect(_refresh_header)
@@ -99,7 +109,7 @@ func _build_ledger() -> void:
 	var column := UITheme.column(4)
 	panel.add_child(column)
 
-	column.add_child(UITheme.label("IRON DUST", 24, UITheme.GOLD))
+	column.add_child(UITheme.logotype(26))
 
 	_turn_label = UITheme.label("", 15, UITheme.PARCHMENT)
 	column.add_child(_turn_label)
@@ -182,26 +192,90 @@ func _reposition_tile_panel() -> void:
 	)
 
 
-func _build_action_bar() -> void:
-	var bar := UITheme.row(8)
-	_root.add_child(bar)
+## Lista pres celou sirku obrazovky. Drív mela napevno dane sirky v souctu
+## 832 px a kotvila se na CENTER_BOTTOM, takze na 1920 pusobila jako ostruvek
+## uprostred. Ted je zakotvena k obema okrajum a tlacitka si sirku deli pomerem
+## — funguje to i na jinem rozliseni nez 1920x1080, coz je nutne, protoze
+## stretch/aspect je nove "expand".
+## Vlastni vyska tlacitek jen pro tuhle listu — Tomas po Etape 1 chtel "dolni
+## panel trochu vetsi do vysky". Kdyby se misto toho zvedl globalni
+## UITheme.BUTTON_HEIGHT, zvetsi se kazde tlacitko ve hre vcetne dialogu,
+## ktere si nikdo nestezoval, ze jsou male.
+const ACTION_BAR_BUTTON_HEIGHT := 52.0
+## Tlacitko + horni/dolni okraj panelu (_action_bar_style pouziva GAP_LOOSE
+## na obe strany) — notifikace vlevo dole potrebuji vedet, jak vysoko nad
+## listou zastavit, jinak se s ni prekryvaji (presne tenhle bug se objevil,
+## kdyz se lista zvetsila a puvodni pevna 20px mezera uz nestacila).
+const ACTION_BAR_TOTAL_HEIGHT := ACTION_BAR_BUTTON_HEIGHT + UITheme.GAP_LOOSE * 2.0
 
+func _build_action_bar() -> void:
+	var frame := PanelContainer.new()
+	frame.add_theme_stylebox_override("panel", _action_bar_style())
+	frame.mouse_filter = Control.MOUSE_FILTER_STOP
+	_root.add_child(frame)
+
+	var bar := UITheme.row(UITheme.GAP)
+	frame.add_child(bar)
+
+	# Etapa 2 tyhle tri slouci do jedineho tlacitka SPRÁVA, ktere otevre
+	# celoobrazovkovou obrazovku se zalozkami. Do te doby zustavaji overlaye.
 	var buttons := [
-		{"text": "TECH  [T]", "width": 130.0, "action": func() -> void: _toggle_overlay(_tech_overlay)},
-		{"text": "STAVBY  [B]", "width": 150.0, "action": _open_build_free},
-		{"text": "OBCHOD  [O]", "width": 150.0, "action": func() -> void: _toggle_overlay(_trade_overlay)},
-		{"text": "ULOŽIT  [F5]", "width": 150.0, "action": func() -> void: _toggle_overlay(_save_overlay)},
-		{"text": "KONEC TAHU  [Enter]", "width": 220.0, "action": GameState.advance_turn},
+		{"text": "TECH  ·  T", "stretch": 2, "action": func() -> void: _toggle_overlay(_tech_overlay)},
+		{"text": "STAVBY  ·  B", "stretch": 2, "action": _open_build_free},
+		{"text": "OBCHOD  ·  O", "stretch": 2, "action": func() -> void: _toggle_overlay(_trade_overlay)},
+		{"text": "ULOŽIT  ·  F5", "stretch": 2, "action": func() -> void: _toggle_overlay(_save_overlay)},
 	]
 
 	for entry in buttons:
-		var button := UITheme.button(entry["text"], Vector2(entry["width"], 44))
+		var button := UITheme.button(String(entry["text"]), Vector2(0, ACTION_BAR_BUTTON_HEIGHT))
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.size_flags_stretch_ratio = float(entry["stretch"])
 		button.pressed.connect(entry["action"])
 		bar.add_child(button)
 
-	bar.set_anchors_and_offsets_preset(
-		Control.PRESET_CENTER_BOTTOM, Control.PRESET_MODE_MINSIZE, 20
-	)
+	# Konec tahu je hlavni akce tahu, takze dostane vlastni vyraznejsi styl
+	# a nejvetsi podil sirky — at je jasne, kam se klika, kdyz uz nic nezbyva.
+	var end_turn := UITheme.button("KONEC TAHU  ·  ↵", Vector2(0, ACTION_BAR_BUTTON_HEIGHT))
+	end_turn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	end_turn.size_flags_stretch_ratio = 4.0
+	end_turn.add_theme_stylebox_override("normal", _primary_style(UITheme.BRASS_DEEP))
+	end_turn.add_theme_stylebox_override("hover", _primary_style(Color(0.376, 0.286, 0.133)))
+	end_turn.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	end_turn.pressed.connect(GameState.advance_turn)
+	bar.add_child(end_turn)
+
+	frame.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE, Control.PRESET_MODE_MINSIZE)
+	frame.offset_left = 0
+	frame.offset_right = 0
+	frame.offset_bottom = 0
+
+
+## Listu drzi u zeme rovna horni linka misto zaobleneho ramecku — pusobi to
+## jako soucast obrazovky, ne jako plovouci panel.
+func _action_bar_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.078, 0.066, 0.057, 0.96)
+	style.border_color = UITheme.BRASS_DEEP
+	style.border_width_top = 1
+	style.content_margin_left = UITheme.PAD
+	style.content_margin_right = UITheme.PAD
+	style.content_margin_top = UITheme.GAP_LOOSE
+	style.content_margin_bottom = UITheme.GAP_LOOSE
+	return style
+
+
+func _primary_style(bg: Color) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = bg
+	style.border_color = UITheme.BRASS
+	style.set_border_width_all(1)
+	style.border_width_bottom = 2
+	style.set_corner_radius_all(UITheme.RADIUS)
+	style.content_margin_left = UITheme.PAD + 4
+	style.content_margin_right = UITheme.PAD + 4
+	style.content_margin_top = UITheme.GAP
+	style.content_margin_bottom = UITheme.GAP
+	return style
 
 
 func _build_notifications() -> void:
@@ -212,8 +286,31 @@ func _build_notifications() -> void:
 	_notification_box.set_anchors_and_offsets_preset(
 		Control.PRESET_BOTTOM_LEFT, Control.PRESET_MODE_MINSIZE, 20
 	)
+	# Odsazeni od spodu musi pocitat s vyskou akcni listy, jinak novejsi
+	# (delsi) notifikace zacnou lezt pod tlacitka.
+	_notification_box.offset_bottom = -(ACTION_BAR_TOTAL_HEIGHT + UITheme.GAP_LOOSE)
 	# Newest entry is appended at the bottom, so the stack has to grow upward.
 	_notification_box.grow_vertical = Control.GROW_DIRECTION_BEGIN
+
+
+func _build_minimap() -> void:
+	_minimap = MinimapScript.new()
+	_minimap.setup(GameState)
+	_root.add_child(_minimap)
+
+	# Puvodne set_anchors_and_offsets_preset(..., PRESET_MODE_MINSIZE, 20) a pak
+	# jen prepis offset_bottom — jenze MINSIZE preset dá top/bottom oba na -20
+	# (nulova vyska pred vynucenim minima) a rucni prepis jen jednoho z nich
+	# posunul cely box mimo obrazovku (rostl smerem doprava/dolu od kotevniho
+	# bodu, ne dovnitr). Vsechny 4 offsety se proto pocitaji rovnou z rozmeru,
+	# ne pres preset.
+	_minimap.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	const MARGIN := 20.0
+	var bottom_clear := ACTION_BAR_TOTAL_HEIGHT + UITheme.GAP_LOOSE
+	_minimap.offset_right = -MARGIN
+	_minimap.offset_left = -MARGIN - _minimap.custom_minimum_size.x
+	_minimap.offset_bottom = -bottom_clear
+	_minimap.offset_top = -bottom_clear - _minimap.custom_minimum_size.y
 
 
 func _build_overlays() -> void:
@@ -221,8 +318,9 @@ func _build_overlays() -> void:
 	_build_overlay = BuildOverlay.new()
 	_trade_overlay = TradeOverlay.new()
 	_save_overlay = SaveOverlay.new()
+	_game_over_overlay = GameOverOverlay.new()
 
-	for overlay in [_tech_overlay, _build_overlay, _trade_overlay, _save_overlay]:
+	for overlay in [_tech_overlay, _build_overlay, _trade_overlay, _save_overlay, _game_over_overlay]:
 		# A full-rect CenterContainer keeps each overlay centred no matter how its
 		# content grows, without measuring anything by hand.
 		var centre := CenterContainer.new()
@@ -232,6 +330,7 @@ func _build_overlays() -> void:
 		centre.add_child(overlay)
 
 	_build_overlay.build_chosen.connect(_on_build_chosen)
+	_game_over_overlay.load_requested.connect(func() -> void: _toggle_overlay(_save_overlay))
 
 
 func _build_combat_banner() -> void:
@@ -243,7 +342,7 @@ func _build_combat_banner() -> void:
 # --- Overlay handling --------------------------------------------------------
 
 func _overlays() -> Array:
-	return [_tech_overlay, _build_overlay, _trade_overlay, _save_overlay]
+	return [_tech_overlay, _build_overlay, _trade_overlay, _save_overlay, _game_over_overlay]
 
 
 func _any_overlay_open() -> bool:
@@ -328,6 +427,12 @@ func _on_game_loaded() -> void:
 	_on_resources_changed(GameState.resources)
 	_on_reputation_changed(GameState.reputation)
 	_refresh_header()
+
+
+func _on_game_over(_reason: String) -> void:
+	_close_overlays()
+	_tile_panel.close()
+	_game_over_overlay.open()
 
 
 func _refresh_header() -> void:

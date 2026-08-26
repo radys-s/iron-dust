@@ -12,9 +12,8 @@ config_version=5
 
 config/name="Iron Dust"
 config/description="1872, americký jihozápad. Ekonomicko-strategická tahová hra."
-run/main_scene="res://scenes/game.tscn"
+run/main_scene="res://scenes/loading.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
-config/icon="res://icon.svg"
 
 [autoload]
 
@@ -24,8 +23,38 @@ GameState="*res://scripts/game/game_state.gd"
 
 window/size/viewport_width=1920
 window/size/viewport_height=1080
+; 3 = fullscreen bez ramecku, prekryje i hlavni panel Windows. Zamerne NE
+; exclusive (4) — alt-tab je pak pomaly a na dvou monitorech to zlobi.
+window/size/mode=3
+window/size/borderless=true
 window/stretch/mode="canvas_items"
-window/stretch/aspect="keep"
+; "expand" misto "keep": pri fullscreenu na jinem pomeru nez 16:9 by "keep"
+; letterboxoval. Vynucuje si to kotveny layout misto pevnych 1920x1080 pixelu.
+window/stretch/aspect="expand"
+
+[input]
+
+game_end_turn={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":4194309,"physical_keycode":0,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+, Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":4194310,"physical_keycode":0,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+]
+}
+game_management={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":77,"physical_keycode":0,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+]
+}
+game_build={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":66,"physical_keycode":0,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+]
+}
+game_save={
+"deadzone": 0.5,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":4194336,"physical_keycode":0,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+]
+}
 
 [rendering]
 

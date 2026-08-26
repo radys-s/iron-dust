@@ -8,12 +8,18 @@ const PITCH_DEG := -35.264
 const YAW_DEG := -45.0
 const CAMERA_DISTANCE := 40.0
 
-const ZOOM_MIN := 4.0
-const ZOOM_MAX := 40.0
+## Etapa 1c doladění: WORLD_SCALE 0.8 zmenšil dlaždice, MAP_RADIUS 11->21
+## zvětšil ostrov — obojí dohromady posouvá rozumné meze zoomu. ZOOM_MIN
+## úměrně WORLD_SCALE (zblízka stejný počet hexů jako dřív), ZOOM_MAX tak,
+## aby při maximálním oddálení byl vidět celý ostrov (poloměr ~20 hexů).
+const ZOOM_MIN := 3.2
+const ZOOM_MAX := 60.0
 const ZOOM_STEP := 1.15
 const PAN_SPEED := 8.0
 
-@export var zoom_size: float = 9.5
+## Sjednoceno se scénovým override v scenes/game.tscn — dřív měly skript a
+## scéna dvě různé hodnoty (9.5 vs 7.5), jen scéna se skutečně použila.
+@export var zoom_size: float = 7.5
 
 var _camera: Camera3D
 var _dragging := false
@@ -37,11 +43,17 @@ func _unhandled_input(event: InputEvent) -> void:
 		match event.button_index:
 			MOUSE_BUTTON_WHEEL_UP:
 				if event.pressed:
-					_set_zoom(zoom_size / ZOOM_STEP)
+					_zoom_at(zoom_size / ZOOM_STEP, event.position)
 			MOUSE_BUTTON_WHEEL_DOWN:
 				if event.pressed:
-					_set_zoom(zoom_size * ZOOM_STEP)
-			MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE:
+					_zoom_at(zoom_size * ZOOM_STEP, event.position)
+			MOUSE_BUTTON_MIDDLE:
+				# Etapa 1b: drive taholo kameru i pravé tlacitko soucasne s tim,
+				# jak game_scene.gd pravym tlacitkem rusi rozestavenou budovu —
+				# zadny ze skriptu si input neoznacoval jako zpracovany, takze
+				# jeden klik delal obe veci najednou a kdyz se ruka pohnula pred
+				# puštěním, kamera se navic posunula. Tazeni ted umi jen prostredni
+				# tlacitko; pravé zustava vyhradne na zruseni/kontext.
 				_dragging = event.pressed
 	elif event is InputEventMouseMotion and _dragging:
 		# Screen pixels -> world units: ortho size maps to viewport height.
@@ -74,6 +86,23 @@ func _pan(delta_screen: Vector2) -> void:
 func _set_zoom(value: float) -> void:
 	zoom_size = clampf(value, ZOOM_MIN, ZOOM_MAX)
 	_camera.size = zoom_size
+
+
+## Priblizeni/oddaleni tak, aby bod pod kurzorem zustal na miste — bez tohohle
+## zoom drzel stred pivotu, takze pri priblizovani k okraji mapy "utikala"
+## zem pod kurzorem pryc. Postup: zjisti bod na zemi pod kurzorem pred zmenou
+## velikosti, zmen zoom, zjisti ten samy bod znovu (uz s novym zoomem, ale
+## stejnou pozici rigu) a rozdil dorovnej posunem pivotu — zadna trigonometrie
+## potreba, staci dva projekcni dotazy.
+func _zoom_at(value: float, screen_pos: Vector2) -> void:
+	var before := screen_to_ground(screen_pos)
+	_set_zoom(value)
+	if before == Vector3.INF:
+		return
+	var after := screen_to_ground(screen_pos)
+	if after == Vector3.INF:
+		return
+	position += before - after
 
 
 func get_camera() -> Camera3D:
