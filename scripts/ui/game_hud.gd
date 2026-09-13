@@ -544,3 +544,9 @@ func show_tile(cell: Vector2i) -> void:
 
 func hide_tile() -> void:
 	_tile_panel.close()
+
+
+## Mezifáze 2: minimapa potřebuje kameru, aby uměla vykreslit rámeček
+## viditelné oblasti a přesouvat pohled na klik/tažení.
+func set_camera_rig(rig: IsoCameraRig) -> void:
+	_minimap.set_camera_rig(rig)

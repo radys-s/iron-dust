@@ -17,6 +17,11 @@ const ZOOM_MAX := 60.0
 const ZOOM_STEP := 1.15
 const PAN_SPEED := 8.0
 
+## Mezifáze 2: MAP_RADIUS (tvrdý oceánský řez) * WORLD_SCALE převádí hex
+## vzdálenost na world jednotky (HEX_RADIUS*SQRT3 == 1.0 přesně). +2.5 je
+## rezerva, ať pobřeží není tvrdá zeď přesně na hraně ostrova.
+const PAN_BOUND_RADIUS := (MapBuilder.MAP_RADIUS * MapBuilder.WORLD_SCALE) + 2.5
+
 ## Sjednoceno se scénovým override v scenes/game.tscn — dřív měly skript a
 ## scéna dvě různé hodnoty (9.5 vs 7.5), jen scéna se skutečně použila.
 @export var zoom_size: float = 7.5
@@ -80,7 +85,20 @@ func _pan(delta_screen: Vector2) -> void:
 	var yaw := deg_to_rad(YAW_DEG)
 	var right := Vector3(cos(yaw), 0.0, -sin(yaw))
 	var forward := Vector3(sin(yaw), 0.0, cos(yaw))
-	position += right * delta_screen.x + forward * delta_screen.y
+	position = _clamp_position(position + right * delta_screen.x + forward * delta_screen.y)
+
+
+## Zabrání tažení/zoomu odtáhnout kameru mimo ostrov — beze změny výšky (Y).
+func _clamp_position(p: Vector3) -> Vector3:
+	var flat := Vector2(p.x, p.z)
+	if flat.length() > PAN_BOUND_RADIUS:
+		flat = flat.normalized() * PAN_BOUND_RADIUS
+	return Vector3(flat.x, p.y, flat.y)
+
+
+## Přesune pivot přímo na danou world XZ pozici (např. klik na minimapě).
+func center_on(world_xz: Vector2) -> void:
+	position = _clamp_position(Vector3(world_xz.x, position.y, world_xz.y))
 
 
 func _set_zoom(value: float) -> void:
@@ -102,7 +120,7 @@ func _zoom_at(value: float, screen_pos: Vector2) -> void:
 	var after := screen_to_ground(screen_pos)
 	if after == Vector3.INF:
 		return
-	position += before - after
+	position = _clamp_position(position + before - after)
 
 
 func get_camera() -> Camera3D:

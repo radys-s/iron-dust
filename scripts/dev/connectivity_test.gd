@@ -2,7 +2,7 @@ extends SceneTree
 
 ## Verifies hex connectivity masks, path/river orientation logic, and determinism.
 
-const EXPECTED_CHECKS := 25
+const EXPECTED_CHECKS := 45
 var _checks := 0
 var _failed := 0
 
@@ -12,6 +12,8 @@ func _init() -> void:
 	_test_straight_connections()
 	_test_corner_connections()
 	_test_network_determinism()
+	_test_mezifaze2_camera_and_border()
+	_test_mezifaze3_yaw_fix_and_fences()
 
 	if _checks != EXPECTED_CHECKS:
 		print("CHYBA: ocekavano %d kontrol, probehlo %d" % [EXPECTED_CHECKS, _checks])
@@ -65,13 +67,13 @@ func _test_straight_connections() -> void:
 	var east_west_mask := (1 << 0) | (1 << 3)
 	var ew_config := MapBuilder.connectivity_config(GameData.Terrain.RAILWAY, east_west_mask)
 	_check(ew_config["type"] == TileCatalog.TileType.ROAD, "typ pro (0,3) je ROAD (straight)", ew_config["type"])
-	_check(is_equal_approx(ew_config["yaw"], 90.0), "yaw pro (0,3) je 90 stupnu", ew_config["yaw"])
+	_check(is_equal_approx(ew_config["yaw"], -90.0), "yaw pro (0,3) je -90 stupnu (world_yaw sign fix)", ew_config["yaw"])
 
 	# Pair (1, 4): diagonal straight
 	var diag1_mask := (1 << 1) | (1 << 4)
 	var diag1_config := MapBuilder.connectivity_config(GameData.Terrain.RAILWAY, diag1_mask)
 	_check(diag1_config["type"] == TileCatalog.TileType.ROAD, "typ pro (1,4) je ROAD", diag1_config["type"])
-	_check(is_equal_approx(diag1_config["yaw"], 30.0) or is_equal_approx(diag1_config["yaw"], -150.0) or is_equal_approx(diag1_config["yaw"], 210.0), "yaw pro (1,4) odpovida sklonu", diag1_config["yaw"])
+	_check(is_equal_approx(diag1_config["yaw"], -30.0), "yaw pro (1,4) je -30 stupnu (world_yaw sign fix)", diag1_config["yaw"])
 
 	# River straight
 	var river_straight_config := MapBuilder.connectivity_config(GameData.Terrain.RIVER, east_west_mask)
@@ -84,6 +86,7 @@ func _test_corner_connections() -> void:
 	var wide_mask := (1 << 0) | (1 << 2)
 	var wide_config := MapBuilder.connectivity_config(GameData.Terrain.RAILWAY, wide_mask)
 	_check(wide_config["type"] == TileCatalog.TileType.ROAD_CORNER, "siroka zatacka vybira ROAD_CORNER", wide_config["type"])
+	_check(is_equal_approx(wide_config["yaw"], -30.0), "yaw pro sirokou zatacku (0,2) je -30 stupnu", wide_config["yaw"])
 
 	var river_wide_config := MapBuilder.connectivity_config(GameData.Terrain.RIVER, wide_mask)
 	_check(river_wide_config["type"] == TileCatalog.TileType.RIVER_CORNER, "reka siroka zatacka vybira RIVER_CORNER", river_wide_config["type"])
@@ -92,6 +95,7 @@ func _test_corner_connections() -> void:
 	var sharp_mask := (1 << 0) | (1 << 1)
 	var sharp_config := MapBuilder.connectivity_config(GameData.Terrain.RAILWAY, sharp_mask)
 	_check(sharp_config["type"] == TileCatalog.TileType.ROAD_CORNER_SHARP, "ostra zatacka vybira ROAD_CORNER_SHARP", sharp_config["type"])
+	_check(is_equal_approx(sharp_config["yaw"], -60.0), "yaw pro ostrou zatacku (0,1) je -60 stupnu", sharp_config["yaw"])
 
 	var river_sharp_config := MapBuilder.connectivity_config(GameData.Terrain.RIVER, sharp_mask)
 	_check(river_sharp_config["type"] == TileCatalog.TileType.RIVER_CORNER_SHARP, "reka ostra zatacka vybira RIVER_CORNER_SHARP", river_sharp_config["type"])
@@ -100,11 +104,18 @@ func _test_corner_connections() -> void:
 	var start_mask := (1 << 0)
 	var start_config := MapBuilder.connectivity_config(GameData.Terrain.RAILWAY, start_mask)
 	_check(start_config["type"] == TileCatalog.TileType.ROAD_START or start_config["type"] == TileCatalog.TileType.ROAD_END, "konecny usek vybira ROAD_START/END", start_config["type"])
+	_check(is_equal_approx(start_config["yaw"], -90.0), "yaw pro konecny usek (dir 0) je -90 stupnu", start_config["yaw"])
 
-	# 3+ connections: crossing
+	# 3+ connections: crossing bez protejsiho paru (0,2,4) -> fallback na nejnizsi bit
 	var cross_mask := (1 << 0) | (1 << 2) | (1 << 4)
 	var cross_config := MapBuilder.connectivity_config(GameData.Terrain.RAILWAY, cross_mask)
 	_check(cross_config["type"] == TileCatalog.TileType.ROAD_CROSSING, "krizovatka vybira ROAD_CROSSING", cross_config["type"])
+	_check(is_equal_approx(cross_config["yaw"], -90.0), "krizovatka bez paru pouzije nejnizsi bit (-90 stupnu)", cross_config["yaw"])
+
+	# 3+ connections: crossing S protejsim parem (0,2,5 — 2 a 5 jsou protejsi) -> srovna se s primym usekem
+	var paired_mask := (1 << 0) | (1 << 2) | (1 << 5)
+	var paired_config := MapBuilder.connectivity_config(GameData.Terrain.RAILWAY, paired_mask)
+	_check(is_equal_approx(paired_config["yaw"], 30.0), "krizovatka s protejsim parem srovna osu (30 stupnu)", paired_config["yaw"])
 
 
 func _test_network_determinism() -> void:
@@ -152,3 +163,59 @@ func _test_network_determinism() -> void:
 		"zeleznice se zastavi v ramci kroku (nezacykli se)", true)
 	_check(river_cells.size() <= (MapBuilder.RIVER_REACH + 1),
 		"reka se zastavi v ramci kroku (nezacykli se)", true)
+
+
+## Mezifaze 2: _clamp_position()/PAN_BOUND_RADIUS jako cista funkce (meze
+## kamery) a _add_contested_edge() jako presny, ne zdvojeny pocet segmentu
+## (oprava problikavani sporne hranice hrac-vs-Voss).
+func _test_mezifaze2_camera_and_border() -> void:
+	print("\n[5] Meze kamery a dedup sporne hranice (Mezifaze 2)")
+
+	var rig := IsoCameraRig.new()
+	var inside := Vector3(1.0, 5.0, 1.0)
+	var clamped_inside: Vector3 = rig._clamp_position(inside)
+	_check(clamped_inside == inside, "pozice uvnitr polomeru zustava nedotcena", clamped_inside)
+
+	var far := Vector3(100.0, 5.0, 0.0)
+	var clamped_far: Vector3 = rig._clamp_position(far)
+	var clamped_len := Vector2(clamped_far.x, clamped_far.z).length()
+	_check(is_equal_approx(clamped_len, IsoCameraRig.PAN_BOUND_RADIUS),
+		"pozice mimo polomer se orizne presne na PAN_BOUND_RADIUS", clamped_len)
+	_check(is_equal_approx(clamped_far.y, far.y), "orez nemeni vysku Y", clamped_far.y)
+	rig.free()
+
+	var overlay := Node3D.new()
+	MapBuilder._add_contested_edge(overlay, Vector3(0.0, 0.0, 0.0), Vector3(1.0, 0.0, 0.0), 0.1,
+		MapBuilder._border_mesh(), MapBuilder._owned_material(), MapBuilder._enemy_material(),
+		MapBuilder._owned_glow_material_get(), MapBuilder._enemy_glow_material_get())
+	_check(overlay.get_child_count() == MapBuilder.CONTESTED_DASH_COUNT * 2,
+		"sporna hrana vyrobi presne CONTESTED_DASH_COUNT*2 segmentu, ne dvojnasobek",
+		overlay.get_child_count())
+	overlay.free()
+
+
+## Mezifaze 3: sign fix rotace (_world_yaw/_crossing_yaw), skladba plotu podle
+## masky (_pasture_fence_pieces), rim_height pro Vossovo uzemi (plovouci
+## stiny) a bucketovany sum mesh variant (mapa "na sebe nenavazuje").
+func _test_mezifaze3_yaw_fix_and_fences() -> void:
+	print("\n[6] Sign fix rotace, skladba plotu, rim_height a bucketovany sum (Mezifaze 3)")
+
+	_check(MapBuilder._world_yaw(90.0) == -90.0, "_world_yaw neguje uhel", MapBuilder._world_yaw(90.0))
+
+	var isolated := MapBuilder._pasture_fence_pieces(1 << 0)
+	_check(isolated.size() == 1, "izolovana hrana = 1 rovny kus", isolated.size())
+	var adjacent := MapBuilder._pasture_fence_pieces((1 << 0) | (1 << 1))
+	_check(adjacent.size() == 3, "sousedici hrany pridaji rohovy kus (2 rovne + 1 roh)", adjacent.size())
+	var opposite := MapBuilder._pasture_fence_pieces((1 << 0) | (1 << 3))
+	_check(opposite.size() == 2, "protejsi hrany bez rohu", opposite.size())
+	var ring := MapBuilder._pasture_fence_pieces(63)
+	_check(ring.size() == 12, "plny prstenec = 6 hran + 6 rohu", ring.size())
+
+	_check(is_equal_approx(TileCatalog.rim_height(TileCatalog.TileType.ENEMY_CAMP), 0.1), "rim_height(ENEMY_CAMP) je 0.1", TileCatalog.rim_height(TileCatalog.TileType.ENEMY_CAMP))
+	_check(is_equal_approx(TileCatalog.rim_height(TileCatalog.TileType.ENEMY_WALL), 0.1), "rim_height(ENEMY_WALL) je 0.1", TileCatalog.rim_height(TileCatalog.TileType.ENEMY_WALL))
+
+	_check(MapBuilder.PROP_DENSITY[GameData.Terrain.OWNED] == 3, "PROP_DENSITY[OWNED] zvednuto na 3", MapBuilder.PROP_DENSITY[GameData.Terrain.OWNED])
+	_check(MapBuilder.PROP_DENSITY[GameData.Terrain.MOUNTAIN] == 3, "PROP_DENSITY[MOUNTAIN] zvednuto na 3", MapBuilder.PROP_DENSITY[GameData.Terrain.MOUNTAIN])
+
+	_check(MapBuilder._variant_bucket(Vector2i(0, 0)) == MapBuilder._variant_bucket(Vector2i(1, 1)), "blizke bunky sdili plosku", true)
+	_check(MapBuilder._variant_bucket(Vector2i(0, 0)) != MapBuilder._variant_bucket(Vector2i(20, 20)), "vzdalene bunky jsou v jine plosce", true)

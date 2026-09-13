@@ -1,0 +1,23 @@
+
+	Farm Animal Pack
+
+	Created/distributed by Quaternius (quaternius.com)
+	Source: https://poly.pizza/bundle/Farm-Animal-Pack-1kUvRTPLzT
+	Updated: 10-07-2022
+
+			------------------------------
+
+	License: (Creative Commons Zero / Public Domain, CC0)
+	http://creativecommons.org/publicdomain/zero/1.0/
+
+	This content is free to use in personal, educational and commercial
+	projects without attribution.
+
+			------------------------------
+
+	Only Sheep.glb from the full 7-animal pack is used in this project
+	(godot-project/assets/quaternius/farm-animal-pack/Sheep.glb).
+
+	Website:  https://quaternius.com/
+	Twitter:  https://twitter.com/quaternius
+	Patreon:  https://patreon.com/quaternius

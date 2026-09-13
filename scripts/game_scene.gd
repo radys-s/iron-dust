@@ -36,6 +36,7 @@ func _ready() -> void:
 	GameState.map_changed.connect(_on_map_changed)
 	GameState.game_loaded.connect(_on_game_loaded)
 	_hud.build_requested.connect(_begin_placement)
+	_hud.set_camera_rig(_rig)
 
 
 ## Rozhodne, s cim se do sceny vstupuje: novou partii v rezimu zvolenem

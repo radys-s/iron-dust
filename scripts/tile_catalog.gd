@@ -85,6 +85,8 @@ const PROP_PATHS := {
 	"bush_large": "res://assets/kenney/nature-kit/plant_bushLarge.glb",
 	"grass_tuft": "res://assets/kenney/nature-kit/grass.glb",
 	"grass_large": "res://assets/kenney/nature-kit/grass_large.glb",
+	"grass_leafs": "res://assets/kenney/nature-kit/grass_leafs.glb",
+	"grass_leafs_large": "res://assets/kenney/nature-kit/grass_leafsLarge.glb",
 	"weed_short": "res://assets/kenney/nature-kit/plant_flatShort.glb",
 	"weed_tall": "res://assets/kenney/nature-kit/plant_flatTall.glb",
 
@@ -141,6 +143,19 @@ const PROP_PATHS := {
 	"crops_wheat": "res://assets/kenney/nature-kit/crops_wheatStageB.glb",
 	"crops_corn": "res://assets/kenney/nature-kit/crops_cornStageC.glb",
 	"crops_rows": "res://assets/kenney/nature-kit/crops_dirtDoubleRow.glb",
+
+	# Ohrady na kraji vlastněného území (Mezifáze 2)
+	"fence_bend": "res://assets/kenney/nature-kit/fence_bend.glb",
+	"fence_bend_center": "res://assets/kenney/nature-kit/fence_bendCenter.glb",
+	"fence_corner": "res://assets/kenney/nature-kit/fence_corner.glb",
+	"fence_gate": "res://assets/kenney/nature-kit/fence_gate.glb",
+	"fence_simple_center": "res://assets/kenney/nature-kit/fence_simpleCenter.glb",
+	"fence_simple_diagonal": "res://assets/kenney/nature-kit/fence_simpleDiagonal.glb",
+	"fence_simple_diagonal_center": "res://assets/kenney/nature-kit/fence_simpleDiagonalCenter.glb",
+	"fence_simple_low": "res://assets/kenney/nature-kit/fence_simpleLow.glb",
+
+	# Zvířata (Mezifáze 3) — Quaternius Farm Animal Pack, CC0
+	"sheep": "res://assets/quaternius/farm-animal-pack/Sheep.glb",
 }
 
 ## Settlement level (1..4) -> mesh. Placeholder medieval shapes; a western
@@ -175,6 +190,8 @@ const RIM_HEIGHTS := {
 	TileType.WATER: 0.1,
 	TileType.WATER_ROCKS: 0.1,
 	TileType.OCEAN: 0.1,
+	TileType.ENEMY_CAMP: 0.1,
+	TileType.ENEMY_WALL: 0.1,
 }
 
 ## Kam se má dekorace vejít, v jednotkách světa. Hex má na šířku 1.155, takže

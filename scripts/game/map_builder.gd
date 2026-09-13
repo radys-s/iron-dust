@@ -99,19 +99,22 @@ const TERRAIN_MESH_VARIANTS := {
 ## Scattered decoration per gameplay terrain.
 const TERRAIN_PROPS := {
 	GameData.Terrain.PRAIRIE: [
-		"bush_small", "bush", "grass_tuft", "grass_large", "weed_short",
+		"bush_small", "bush", "grass_tuft", "grass_tuft", "grass_large",
+		"grass_leafs", "grass_leafs_large", "weed_short",
 		"rock_smallB", "rock_smallC", "rock_flatA", "stump_old", "tree_thin",
 	],
 	GameData.Terrain.OWNED: [
-		"grass_tuft", "weed_short", "rock_flatB", "crops_rows", "crops_wheat",
+		"grass_tuft", "grass_tuft", "grass_leafs", "grass_large", "weed_short",
+		"rock_flatB", "crops_rows", "crops_wheat", "crops_corn", "log_stack", "stump_old",
 	],
 	GameData.Terrain.DESERT: [
 		"cactus_tall", "cactus_short", "rock_smallA", "rock_smallE",
 		"rock_flatA", "stump_old", "weed_tall", "rock_smallG",
 	],
 	GameData.Terrain.MOUNTAIN: [
-		"rock_largeA", "rock_largeB", "rock_largeD", "rock_largeE",
-		"rock_tallA", "rock_tallC", "tree_pine_tall", "tree_pine_small",
+		"rock_largeA", "rock_largeB", "rock_largeC", "rock_largeD", "rock_largeE", "rock_largeF",
+		"rock_tallA", "rock_tallB", "rock_tallC", "rock_tallD",
+		"tree_pine_tall", "tree_pine_small",
 	],
 	GameData.Terrain.RIVER: ["rock_flatA", "grass_large", "bush_small"],
 	GameData.Terrain.RAILWAY: ["weed_short", "rock_smallC", "log", "sign"],
@@ -127,11 +130,12 @@ const ENEMY_BASE_PROPS: Array[String] = [
 	"fence_high", "campfire_logs", "log_stack", "sign",
 ]
 
+
 const PROP_DENSITY := {
-	GameData.Terrain.PRAIRIE: 2,
-	GameData.Terrain.OWNED: 1,
+	GameData.Terrain.PRAIRIE: 3,
+	GameData.Terrain.OWNED: 3,
 	GameData.Terrain.DESERT: 3,
-	GameData.Terrain.MOUNTAIN: 2,
+	GameData.Terrain.MOUNTAIN: 3,
 	GameData.Terrain.RIVER: 1,
 	GameData.Terrain.RAILWAY: 1,
 	GameData.Terrain.ENEMY: 3,
@@ -185,6 +189,11 @@ static var _fog_mesh_cache: Dictionary = {}  # TileType -> Mesh (zamlžená barv
 
 const AmbientCritterScript = preload("res://scripts/world/ambient_critter.gd")
 const AmbientVillagerScript = preload("res://scripts/world/ambient_villager.gd")
+const AmbientSheepScript = preload("res://scripts/world/ambient_sheep.gd")
+
+## Mezifáze 2: jeden knoflík na doladění velikosti napříč kritterem,
+## vesničanem i ovcí (Tomáš: "velikost o trochu menší, ale to je detail").
+const AMBIENT_SCALE_TWEAK := 0.9
 
 
 # --- Network generators ------------------------------------------------------
@@ -299,12 +308,31 @@ static func connectivity_mask(cell: Vector2i, network: Dictionary) -> int:
 	return mask
 
 
+## _EDGE_ANGLES_DEG meri uhel v konvenci "+X k +Z" (viz _hex_corner()). Godotova
+## rotation.y otaci +X k -Z — presny opak. Kazda hodnota odvozena z
+## _EDGE_ANGLES_DEG, ktera jde primo do rotation.y, musi projit touhle negaci,
+## jinak sedi jen symetricke (rovne E-Z) dily a vsechno ostatni je pootocene.
+static func _world_yaw(edge_angle_deg: float) -> float:
+	return -edge_angle_deg
+
+
+## Krizovatka (3+ napojeni) nema jediny prirozeny smer. Kdyz je mezi napojenymi
+## smery protejsi par (rozdil 3), zarovna se s nim stejne jako rovny usek;
+## jinak padne na smer nejnizsiho bitu jako na osamoceny konec.
+static func _crossing_yaw(bits: Array[int]) -> float:
+	for i in bits.size():
+		for j in range(i + 1, bits.size()):
+			if (bits[j] - bits[i]) % 6 == 3:
+				return _world_yaw(_EDGE_ANGLES_DEG[bits[i]] + 90.0)
+	return _world_yaw(_EDGE_ANGLES_DEG[bits[0]] + 90.0)
+
+
 static func connectivity_config(terrain: GameData.Terrain, mask: int) -> Dictionary:
 	var is_rail := (terrain == GameData.Terrain.RAILWAY)
 	if mask == 0:
 		return {
 			"type": TileCatalog.TileType.ROAD if is_rail else TileCatalog.TileType.RIVER_STRAIGHT,
-			"yaw": 90.0,
+			"yaw": _world_yaw(90.0),
 		}
 
 	# Count bits
@@ -317,7 +345,7 @@ static func connectivity_config(terrain: GameData.Terrain, mask: int) -> Diction
 		var dir := bits[0]
 		return {
 			"type": TileCatalog.TileType.ROAD_START if is_rail else TileCatalog.TileType.RIVER_START,
-			"yaw": _EDGE_ANGLES_DEG[dir] + 90.0,
+			"yaw": _world_yaw(_EDGE_ANGLES_DEG[dir] + 90.0),
 		}
 
 	if bits.size() == 2:
@@ -329,27 +357,27 @@ static func connectivity_config(terrain: GameData.Terrain, mask: int) -> Diction
 			# Straight opposite line
 			return {
 				"type": TileCatalog.TileType.ROAD if is_rail else TileCatalog.TileType.RIVER_STRAIGHT,
-				"yaw": _EDGE_ANGLES_DEG[a] + 90.0,
+				"yaw": _world_yaw(_EDGE_ANGLES_DEG[a] + 90.0),
 			}
 		elif delta == 2 or delta == 4:
 			# Wide corner (120 degrees)
 			var intermediate_idx := (a + 1) % 6 if delta == 2 else (b + 1) % 6
 			return {
 				"type": TileCatalog.TileType.ROAD_CORNER if is_rail else TileCatalog.TileType.RIVER_CORNER,
-				"yaw": _EDGE_ANGLES_DEG[intermediate_idx] + 90.0,
+				"yaw": _world_yaw(_EDGE_ANGLES_DEG[intermediate_idx] + 90.0),
 			}
 		elif delta == 1 or delta == 5:
 			# Sharp corner (60 degrees)
 			var base_dir := a if delta == 1 else b
 			return {
 				"type": TileCatalog.TileType.ROAD_CORNER_SHARP if is_rail else TileCatalog.TileType.RIVER_CORNER_SHARP,
-				"yaw": _EDGE_ANGLES_DEG[base_dir] + 60.0,
+				"yaw": _world_yaw(_EDGE_ANGLES_DEG[base_dir] + 60.0),
 			}
 
-	# 3+ connections: crossing
+	# 3+ connections: crossing — zarovna se s protejsim parem, jinak nejnizsi bit
 	return {
 		"type": TileCatalog.TileType.ROAD_CROSSING if is_rail else TileCatalog.TileType.RIVER_STRAIGHT,
-		"yaw": 0.0,
+		"yaw": _crossing_yaw(bits),
 	}
 
 
@@ -533,7 +561,7 @@ static func render(gs, world: Node3D) -> void:
 
 				if TERRAIN_TINT.has(terrain):
 					_tint_surfaces(tile, TERRAIN_TINT[terrain])
-				_scatter_props(gs, cell, terrain, prop_root)
+				_scatter_props(gs, cell, terrain, prop_root, mesh_type)
 
 				# Ambient critters (wildlife) on revealed land
 				if (terrain == GameData.Terrain.PRAIRIE or terrain == GameData.Terrain.DESERT) \
@@ -545,7 +573,7 @@ static func render(gs, world: Node3D) -> void:
 						(_noise(cell, 163) - 0.5) * 0.4 * WORLD_SCALE
 					)
 					critter.position = position + jitter
-					critter.scale = Vector3(WORLD_SCALE, WORLD_SCALE, WORLD_SCALE)
+					critter.scale = Vector3(WORLD_SCALE, WORLD_SCALE, WORLD_SCALE) * AMBIENT_SCALE_TWEAK
 					critter.setup(int(_noise(cell, 173) * 1000.0))
 					prop_root.add_child(critter)
 
@@ -558,9 +586,26 @@ static func render(gs, world: Node3D) -> void:
 						(_noise(cell, 193) - 0.5) * 0.4 * WORLD_SCALE
 					)
 					villager.position = position + villager_jitter
-					villager.scale = Vector3(WORLD_SCALE, WORLD_SCALE, WORLD_SCALE)
+					villager.scale = Vector3(WORLD_SCALE, WORLD_SCALE, WORLD_SCALE) * AMBIENT_SCALE_TWEAK
 					villager.setup(int(_noise(cell, 197) * 1000.0))
 					prop_root.add_child(villager)
+
+				# Ambient sheep (real downloaded model) on owned pasture edges —
+				# Mezifáze 2 bod 3. TileCatalog.prop_scene("sheep") vrací null,
+				# dokud model není stažený a zapsaný do PROP_PATHS, takže tahle
+				# větev je do té doby neškodný mrtvý kód.
+				if terrain == GameData.Terrain.OWNED and TileCatalog.prop_scene("sheep") != null \
+						and _is_owned_pasture_edge(gs, cell) and _noise(cell, 311) < 0.10:
+					var sheep: Node3D = AmbientSheepScript.new()
+					var sheep_jitter := Vector3(
+						(_noise(cell, 317) - 0.5) * 0.5 * WORLD_SCALE,
+						TileCatalog.TILE_TOP_Y * WORLD_SCALE,
+						(_noise(cell, 331) - 0.5) * 0.5 * WORLD_SCALE
+					)
+					sheep.position = position + sheep_jitter
+					sheep.scale = Vector3(WORLD_SCALE, WORLD_SCALE, WORLD_SCALE) * AMBIENT_SCALE_TWEAK
+					sheep.setup(int(_noise(cell, 337) * 1000.0))
+					prop_root.add_child(sheep)
 		else:
 			var built := structure.instantiate()
 			built.position = position
@@ -569,10 +614,11 @@ static func render(gs, world: Node3D) -> void:
 				_tint_surfaces(built, TERRAIN_TINT[terrain])
 			structure_root.add_child(built)
 			if gs.is_ai_territory(cell):
-				_scatter_props(gs, cell, terrain, prop_root)
+				_scatter_props(gs, cell, terrain, prop_root, TileCatalog.TileType.ENEMY_CAMP)
 
 	_render_fog_batches(fog_batches, terrain_root)
 	_add_territory_borders(gs, overlay_root)
+	_add_pasture_fences(gs, prop_root)
 
 
 static func _structure_scene(gs, cell: Vector2i) -> PackedScene:
@@ -591,14 +637,29 @@ static func _structure_scene(gs, cell: Vector2i) -> PackedScene:
 	return null
 
 
+## Hrubost plošky pro sdílení mesh varianty (v hexech). Menší = jemnější
+## mozaika, ale výraznější mřížka na hranici plošky — dolaďuje se vizuálně.
+const MESH_VARIANT_BUCKET := 2
+
+## Hrubší, sdílená prostorová buňka místo syrové `cell` — sousedící hexy ve
+## stejné plošce dostanou stejnou mesh variantu, takže vznikne pár-hexů
+## velká skvrna terénu místo šumu na úrovni jednoho hexu (Mezifáze 3, bod 3).
+static func _variant_bucket(cell: Vector2i) -> Vector2i:
+	return Vector2i(
+		floori(cell.x / float(MESH_VARIANT_BUCKET)),
+		floori(cell.y / float(MESH_VARIANT_BUCKET))
+	)
+
+
 static func _mesh_for(cell: Vector2i, terrain: GameData.Terrain) -> TileCatalog.TileType:
 	if not TERRAIN_MESH_VARIANTS.has(terrain):
 		return TERRAIN_MESH[terrain]
 	var options: Array = TERRAIN_MESH_VARIANTS[terrain]
-	return options[int(_noise(cell, 11) * float(options.size())) % options.size()]
+	return options[int(_noise(_variant_bucket(cell), 11) * float(options.size())) % options.size()]
 
 
-static func _scatter_props(gs, cell: Vector2i, terrain: GameData.Terrain, parent: Node3D) -> void:
+static func _scatter_props(gs, cell: Vector2i, terrain: GameData.Terrain, parent: Node3D,
+		mesh_type: TileCatalog.TileType) -> void:
 	var choices: Array = _prop_choices(gs, cell, terrain)
 	if choices.is_empty():
 		return
@@ -632,7 +693,7 @@ static func _scatter_props(gs, cell: Vector2i, terrain: GameData.Terrain, parent
 		placed.append(flat)
 
 		var prop := scene.instantiate()
-		prop.position = base + jitter + Vector3(0.0, TileCatalog.TILE_TOP_Y * WORLD_SCALE, 0.0)
+		prop.position = base + jitter + Vector3(0.0, TileCatalog.rim_height(mesh_type) * WORLD_SCALE, 0.0)
 		prop.rotation.y = _noise(cell, 67 + salt) * TAU
 		var scale := TileCatalog.prop_scale(String(choices[index])) \
 			* (0.85 + _noise(cell, 79 + salt) * 0.34) * WORLD_SCALE
@@ -648,6 +709,15 @@ static func _prop_choices(gs, cell: Vector2i, terrain: GameData.Terrain) -> Arra
 	if int(gs.ai_settlements.get(cell, 0)) > 0:
 		return ENEMY_BASE_PROPS
 	return TERRAIN_PROPS.get(terrain, [])
+
+
+## True, pokud vlastněná buňka sousedí s aspoň jednou nevlastněnou — okraj
+## ranče, kam patří deterministický plot (_add_pasture_fences) a ovce.
+static func _is_owned_pasture_edge(gs, cell: Vector2i) -> bool:
+	for dir in HexGrid.NEIGHBOR_DIRS:
+		if not gs.is_owned(cell + dir):
+			return true
+	return false
 
 
 static func _tint_surfaces(node: Node, color: Color) -> void:
@@ -784,6 +854,12 @@ const BORDER_GLOW_THICKNESS := 0.24
 const BORDER_GLOW_HEIGHT := 0.045
 const BORDER_GLOW_ALPHA := 0.24
 
+## Mezifáze 2: sporná hrana (vlastněná sousedí s nepřátelskou) se dřív
+## kreslila dvakrát — jednou z každé strany, stejná geometrie, no_depth_test
+## bez tiebreakeru → problikávání. Teď ji kreslí jen vlastněná strana, jako
+## přerušovanou zlato-červenou čáru.
+const CONTESTED_DASH_COUNT := 4
+
 static func _add_territory_borders(gs, overlay_root: Node3D) -> void:
 	var box := _border_mesh()
 	var joint_cyl := _border_joint_mesh()
@@ -816,9 +892,19 @@ static func _add_territory_borders(gs, overlay_root: Node3D) -> void:
 				or (enemy and gs.is_ai_territory(neighbor))
 			if same_side:
 				continue
+			var neighbor_owned: bool = gs.is_owned(neighbor)
+			var neighbor_enemy: bool = gs.is_ai_territory(neighbor)
+			if enemy and neighbor_owned:
+				continue  # sporná hrana: nakreslí ji jen vlastněná strana níže
+
 			var angle: float = _EDGE_ANGLES_DEG[i]
 			var corner_a := _hex_corner(center, angle - 30.0)
 			var corner_b := _hex_corner(center, angle + 30.0)
+
+			if owned and neighbor_enemy:
+				_add_contested_edge(overlay_root, corner_a, corner_b, height, box,
+					owned_material, enemy_material, owned_glow, enemy_glow)
+				continue
 
 			overlay_root.add_child(
 				_border_segment(corner_a, corner_b, height, BORDER_THICKNESS, BORDER_HEIGHT, box, material)
@@ -841,9 +927,108 @@ static func _add_territory_borders(gs, overlay_root: Node3D) -> void:
 			overlay_root.add_child(glow_joint_a)
 
 
+## Sporná hrana (vlastněná vs. nepřátelská): místo jedné plné barvy
+## CONTESTED_DASH_COUNT střídavých segmentů zlato/červená. Rohový joint
+## se u sporné hrany nekreslí (zjednodušení — sousední nesporné hrany
+## stejného hexu ho na sdíleném rohu stejně dodají).
+static func _add_contested_edge(overlay_root: Node3D, corner_a: Vector3, corner_b: Vector3,
+		height: float, box: BoxMesh,
+		owned_material: StandardMaterial3D, enemy_material: StandardMaterial3D,
+		owned_glow: StandardMaterial3D, enemy_glow: StandardMaterial3D) -> void:
+	for d in CONTESTED_DASH_COUNT:
+		var t0 := float(d) / float(CONTESTED_DASH_COUNT)
+		var t1 := float(d + 1) / float(CONTESTED_DASH_COUNT)
+		var dash_a := corner_a.lerp(corner_b, t0)
+		var dash_b := corner_a.lerp(corner_b, t1)
+		var mat := owned_material if d % 2 == 0 else enemy_material
+		var glow := owned_glow if d % 2 == 0 else enemy_glow
+		overlay_root.add_child(
+			_border_segment(dash_a, dash_b, height, BORDER_THICKNESS, BORDER_HEIGHT, box, mat)
+		)
+		overlay_root.add_child(
+			_border_segment(dash_a, dash_b, height, BORDER_GLOW_THICKNESS, BORDER_GLOW_HEIGHT, box, glow)
+		)
+
+
 static func _hex_corner(center: Vector3, angle_deg: float) -> Vector3:
 	var rad := deg_to_rad(angle_deg)
 	return center + Vector3(cos(rad), 0.0, sin(rad)) * (HexGrid.HEX_RADIUS * WORLD_SCALE)
+
+
+# --- Pasture fences (Mezifáze 3) ----------------------------------------------
+
+## Rovné kusy plotu na pastvinové hraně — pár vizuálně blízkých variant (obě
+## plaňkové, stejná výška), ne jeden model porád dokola.
+const PASTURE_FENCE_STRAIGHT := ["fence_simple", "fence_planks"]
+
+## Vrací seznam kusů plotu pro danou hraniční masku (bit i = sousední buňka
+## i NENÍ vlastněná). Čistá funkce, přímo testovatelná — zrcadlí
+## connectivity_mask()/connectivity_config() pro tratě, jen pro hranici
+## vlastnictví místo sítě.
+static func _pasture_fence_pieces(mask: int) -> Array:
+	var pieces: Array = []
+	for i in range(6):
+		if (mask & (1 << i)) != 0:
+			pieces.append({"kind": "edge", "dir": i})
+	for i in range(6):
+		var j := (i + 1) % 6
+		if (mask & (1 << i)) != 0 and (mask & (1 << j)) != 0:
+			pieces.append({"kind": "corner", "between": [i, j]})
+	return pieces
+
+
+## Deterministický plot na kraji vlastněného území — nahrazuje starý
+## OWNED_PASTURE_PROPS (náhodně rotovaná dekorace, u rohových kusů to
+## nedávalo smysl). Volá se jednou za render() jako vlastní celomapový
+## průchod, paralelní k _add_territory_borders().
+static func _add_pasture_fences(gs, root: Node3D) -> void:
+	for c in gs.tiles:
+		var cell: Vector2i = c
+		if not gs.is_owned(cell):
+			continue
+		var mask := 0
+		for i in HexGrid.NEIGHBOR_DIRS.size():
+			if not gs.is_owned(cell + HexGrid.NEIGHBOR_DIRS[i]):
+				mask |= (1 << i)
+		if mask == 0:
+			continue
+
+		var center := HexGrid.axial_to_world(cell.x, cell.y) * WORLD_SCALE
+		for piece in _pasture_fence_pieces(mask):
+			if piece["kind"] == "edge":
+				var i: int = piece["dir"]
+				var corner_a := _hex_corner(center, _EDGE_ANGLES_DEG[i] - 30.0)
+				var corner_b := _hex_corner(center, _EDGE_ANGLES_DEG[i] + 30.0)
+				var mid := (corner_a + corner_b) * 0.5
+				var yaw := _world_yaw(_EDGE_ANGLES_DEG[i] + 90.0)
+				var variant: String = PASTURE_FENCE_STRAIGHT[
+					int(_noise(cell, 401 + i * 11) * PASTURE_FENCE_STRAIGHT.size()) % PASTURE_FENCE_STRAIGHT.size()
+				]
+				_place_fence(root, variant, mid, yaw)
+			else:
+				# Sdílený vrchol dvou sousedících hran je corner_a hrany
+				# s nižším indexem (viz _add_territory_borders — corner_a
+				# hrany i == corner_b hrany i+1). Orientace kusu je odhad
+				# ze symetrie (radiálně ven z vrcholu), dolaďuje se vizuálně.
+				var pair: Array = piece["between"]
+				var corner_angle: float = _EDGE_ANGLES_DEG[pair[0]] - 30.0
+				var corner := _hex_corner(center, corner_angle)
+				_place_fence(root, "fence_corner", corner, _world_yaw(corner_angle + 90.0))
+
+
+static func _place_fence(root: Node3D, name: String, world_pos: Vector3, yaw_deg: float) -> void:
+	var scene := TileCatalog.prop_scene(name)
+	if scene == null:
+		return
+	var fence := scene.instantiate()
+	var rim := TileCatalog.rim_height(TileCatalog.TileType.GRASS)
+	fence.position = world_pos + Vector3(0.0, rim * WORLD_SCALE, 0.0)
+	fence.rotation.y = deg_to_rad(yaw_deg)
+	var scale := TileCatalog.prop_scale(name) * WORLD_SCALE
+	fence.scale = Vector3(scale, scale, scale)
+	if TERRAIN_TINT.has(GameData.Terrain.OWNED):
+		_tint_surfaces(fence, TERRAIN_TINT[GameData.Terrain.OWNED])
+	root.add_child(fence)
 
 
 static func _border_segment(corner_a: Vector3, corner_b: Vector3, height: float,
