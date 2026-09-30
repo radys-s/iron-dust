@@ -46,8 +46,13 @@ func _place(terrain: GameData.Terrain, terrain_name: String, case_name: String, 
 	_index += 1
 
 	var cfg := MapBuilder.connectivity_config(terrain, mask)
+	if terrain == GameData.Terrain.RAILWAY:
+		# path-*.glb je tenka nasivka (vyska 0.025), ne cely hex — pod ni patri zaklad
+		var base: Node3D = TileCatalog.terrain_scene(MapBuilder.RAIL_BASE_TILE).instantiate()
+		base.position = origin
+		add_child(base)
 	var tile: Node3D = TileCatalog.terrain_scene(cfg["type"]).instantiate()
-	tile.position = origin
+	tile.position = origin + Vector3(0.0, MapBuilder.rail_decal_lift() if terrain == GameData.Terrain.RAILWAY else 0.0, 0.0)
 	tile.rotation.y = deg_to_rad(cfg["yaw"])
 	add_child(tile)
 

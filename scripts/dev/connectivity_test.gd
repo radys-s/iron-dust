@@ -2,7 +2,7 @@ extends SceneTree
 
 ## Verifies hex connectivity masks, path/river orientation logic, and determinism.
 
-const EXPECTED_CHECKS := 45
+const EXPECTED_CHECKS := 50
 var _checks := 0
 var _failed := 0
 
@@ -67,13 +67,13 @@ func _test_straight_connections() -> void:
 	var east_west_mask := (1 << 0) | (1 << 3)
 	var ew_config := MapBuilder.connectivity_config(GameData.Terrain.RAILWAY, east_west_mask)
 	_check(ew_config["type"] == TileCatalog.TileType.ROAD, "typ pro (0,3) je ROAD (straight)", ew_config["type"])
-	_check(is_equal_approx(ew_config["yaw"], -90.0), "yaw pro (0,3) je -90 stupnu (world_yaw sign fix)", ew_config["yaw"])
+	_check(is_equal_approx(ew_config["yaw"], 0.0), "yaw pro (0,3) je 0 (nativni osa rovneho dilu, geometrie .glb)", ew_config["yaw"])
 
 	# Pair (1, 4): diagonal straight
 	var diag1_mask := (1 << 1) | (1 << 4)
 	var diag1_config := MapBuilder.connectivity_config(GameData.Terrain.RAILWAY, diag1_mask)
 	_check(diag1_config["type"] == TileCatalog.TileType.ROAD, "typ pro (1,4) je ROAD", diag1_config["type"])
-	_check(is_equal_approx(diag1_config["yaw"], -30.0), "yaw pro (1,4) je -30 stupnu (world_yaw sign fix)", diag1_config["yaw"])
+	_check(is_equal_approx(diag1_config["yaw"], 60.0), "yaw pro (1,4) je 60 stupnu", diag1_config["yaw"])
 
 	# River straight
 	var river_straight_config := MapBuilder.connectivity_config(GameData.Terrain.RIVER, east_west_mask)
@@ -86,7 +86,7 @@ func _test_corner_connections() -> void:
 	var wide_mask := (1 << 0) | (1 << 2)
 	var wide_config := MapBuilder.connectivity_config(GameData.Terrain.RAILWAY, wide_mask)
 	_check(wide_config["type"] == TileCatalog.TileType.ROAD_CORNER, "siroka zatacka vybira ROAD_CORNER", wide_config["type"])
-	_check(is_equal_approx(wide_config["yaw"], -30.0), "yaw pro sirokou zatacku (0,2) je -30 stupnu", wide_config["yaw"])
+	_check(is_equal_approx(wide_config["yaw"], -60.0), "yaw pro sirokou zatacku (0,2) je -60 stupnu", wide_config["yaw"])
 
 	var river_wide_config := MapBuilder.connectivity_config(GameData.Terrain.RIVER, wide_mask)
 	_check(river_wide_config["type"] == TileCatalog.TileType.RIVER_CORNER, "reka siroka zatacka vybira RIVER_CORNER", river_wide_config["type"])
@@ -95,7 +95,7 @@ func _test_corner_connections() -> void:
 	var sharp_mask := (1 << 0) | (1 << 1)
 	var sharp_config := MapBuilder.connectivity_config(GameData.Terrain.RAILWAY, sharp_mask)
 	_check(sharp_config["type"] == TileCatalog.TileType.ROAD_CORNER_SHARP, "ostra zatacka vybira ROAD_CORNER_SHARP", sharp_config["type"])
-	_check(is_equal_approx(sharp_config["yaw"], -60.0), "yaw pro ostrou zatacku (0,1) je -60 stupnu", sharp_config["yaw"])
+	_check(is_equal_approx(sharp_config["yaw"], -120.0), "yaw pro ostrou zatacku (0,1) je -120 stupnu", sharp_config["yaw"])
 
 	var river_sharp_config := MapBuilder.connectivity_config(GameData.Terrain.RIVER, sharp_mask)
 	_check(river_sharp_config["type"] == TileCatalog.TileType.RIVER_CORNER_SHARP, "reka ostra zatacka vybira RIVER_CORNER_SHARP", river_sharp_config["type"])
@@ -104,18 +104,18 @@ func _test_corner_connections() -> void:
 	var start_mask := (1 << 0)
 	var start_config := MapBuilder.connectivity_config(GameData.Terrain.RAILWAY, start_mask)
 	_check(start_config["type"] == TileCatalog.TileType.ROAD_START or start_config["type"] == TileCatalog.TileType.ROAD_END, "konecny usek vybira ROAD_START/END", start_config["type"])
-	_check(is_equal_approx(start_config["yaw"], -90.0), "yaw pro konecny usek (dir 0) je -90 stupnu", start_config["yaw"])
+	_check(is_equal_approx(start_config["yaw"], -180.0), "yaw pro konecny usek (dir 0) je -180 stupnu", start_config["yaw"])
 
 	# 3+ connections: crossing bez protejsiho paru (0,2,4) -> fallback na nejnizsi bit
 	var cross_mask := (1 << 0) | (1 << 2) | (1 << 4)
 	var cross_config := MapBuilder.connectivity_config(GameData.Terrain.RAILWAY, cross_mask)
 	_check(cross_config["type"] == TileCatalog.TileType.ROAD_CROSSING, "krizovatka vybira ROAD_CROSSING", cross_config["type"])
-	_check(is_equal_approx(cross_config["yaw"], -90.0), "krizovatka bez paru pouzije nejnizsi bit (-90 stupnu)", cross_config["yaw"])
+	_check(is_equal_approx(cross_config["yaw"], 0.0), "krizovatka bez paru pouzije nejnizsi bit (0 stupnu)", cross_config["yaw"])
 
 	# 3+ connections: crossing S protejsim parem (0,2,5 — 2 a 5 jsou protejsi) -> srovna se s primym usekem
 	var paired_mask := (1 << 0) | (1 << 2) | (1 << 5)
 	var paired_config := MapBuilder.connectivity_config(GameData.Terrain.RAILWAY, paired_mask)
-	_check(is_equal_approx(paired_config["yaw"], 30.0), "krizovatka s protejsim parem srovna osu (30 stupnu)", paired_config["yaw"])
+	_check(is_equal_approx(paired_config["yaw"], 120.0), "krizovatka s protejsim parem srovna osu (120 stupnu)", paired_config["yaw"])
 
 
 func _test_network_determinism() -> void:
@@ -156,6 +156,19 @@ func _test_network_determinism() -> void:
 	var riv_a := MapBuilder._compute_river_cells()
 	var riv_b := MapBuilder._compute_river_cells()
 	_check(riv_a == riv_b, "reka: nezavisly prepocet (bez cache) dava stejnou cestu", true)
+
+	# Meandrove rozsireni nesmi zkreslit masku sousedu jadra reky
+	var widen_clean := true
+	var widen_is_river := true
+	for w in MapBuilder._cached_river_widen:
+		if MapBuilder._cached_river_dict.has(w):
+			widen_clean = false
+		var t := MapBuilder.base_terrain(w)
+		if t != GameData.Terrain.RIVER and t != GameData.Terrain.RAILWAY and t != GameData.Terrain.TOWN and t != GameData.Terrain.OCEAN and t != GameData.Terrain.MINE:
+			widen_is_river = false
+	_check(not MapBuilder._cached_river_widen.is_empty(), "reka ma nejake meandrove rozsireni", MapBuilder._cached_river_widen.size())
+	_check(widen_clean, "rozsireni neni v jadru reky (nepocita se do masky)", true)
+	_check(widen_is_river, "rozsireni je gameplayove RIVER (pokud jej nepřebije jiný terén)", true)
 
 	# Ukonceni: random walk se musi zastavit v ramci sveho krokoveho stropu,
 	# ne zacyklit se donekonecna.
@@ -201,15 +214,20 @@ func _test_mezifaze3_yaw_fix_and_fences() -> void:
 	print("\n[6] Sign fix rotace, skladba plotu, rim_height a bucketovany sum (Mezifaze 3)")
 
 	_check(MapBuilder._world_yaw(90.0) == -90.0, "_world_yaw neguje uhel", MapBuilder._world_yaw(90.0))
-
-	var isolated := MapBuilder._pasture_fence_pieces(1 << 0)
-	_check(isolated.size() == 1, "izolovana hrana = 1 rovny kus", isolated.size())
-	var adjacent := MapBuilder._pasture_fence_pieces((1 << 0) | (1 << 1))
-	_check(adjacent.size() == 3, "sousedici hrany pridaji rohovy kus (2 rovne + 1 roh)", adjacent.size())
-	var opposite := MapBuilder._pasture_fence_pieces((1 << 0) | (1 << 3))
-	_check(opposite.size() == 2, "protejsi hrany bez rohu", opposite.size())
-	var ring := MapBuilder._pasture_fence_pieces(63)
-	_check(ring.size() == 12, "plny prstenec = 6 hran + 6 rohu", ring.size())
+	# Plot: sloupek na kazdem UNIKATNIM vrcholu hranice, i na prechodech mezi sousedy
+	var single := MapBuilder._pasture_boundary({Vector2i(0, 0): true})
+	_check(single["edges"].size() == 6 and single["posts"].size() == 6, "osamela bunka = 6 hran + 6 sloupku", single["posts"].size())
+	var pair := MapBuilder._pasture_boundary({Vector2i(0, 0): true, Vector2i(1, 0): true})
+	_check(pair["edges"].size() == 10 and pair["posts"].size() == 10, "dve sousedici bunky = 10 hran, 10 sloupku (sdilene vrcholy se nezdvoji)", pair["posts"].size())
+	var flower_cells := {Vector2i(0, 0): true}
+	for d in HexGrid.NEIGHBOR_DIRS:
+		flower_cells[Vector2i(0, 0) + d] = true
+	var flower := MapBuilder._pasture_boundary(flower_cells)
+	_check(flower["edges"].size() == 18 and flower["posts"].size() == 18, "sedmicka hexu = 18 hran, 18 sloupku (vnitrek bez plotu)", flower["posts"].size())
+	_check(TileCatalog.surface_height(TileCatalog.TileType.STONE_MOUNTAIN, Vector2.ZERO) > 0.9, "vrchol hory je vysoko (props se nezahrabou)", TileCatalog.surface_height(TileCatalog.TileType.STONE_MOUNTAIN, Vector2.ZERO))
+	_check(is_equal_approx(TileCatalog.surface_height(TileCatalog.TileType.GRASS, Vector2.ZERO), 0.2), "plochy typ vraci rim_height", true)
+	var fence_bounds :=TileCatalog.prop_bounds("fence_simple")
+	_check(fence_bounds.size.x > 0.9, "fence_simple ma nativni delku ~1.0 (po roztazeni sedi na hranu)", fence_bounds.size.x)
 
 	_check(is_equal_approx(TileCatalog.rim_height(TileCatalog.TileType.ENEMY_CAMP), 0.1), "rim_height(ENEMY_CAMP) je 0.1", TileCatalog.rim_height(TileCatalog.TileType.ENEMY_CAMP))
 	_check(is_equal_approx(TileCatalog.rim_height(TileCatalog.TileType.ENEMY_WALL), 0.1), "rim_height(ENEMY_WALL) je 0.1", TileCatalog.rim_height(TileCatalog.TileType.ENEMY_WALL))
@@ -217,5 +235,5 @@ func _test_mezifaze3_yaw_fix_and_fences() -> void:
 	_check(MapBuilder.PROP_DENSITY[GameData.Terrain.OWNED] == 3, "PROP_DENSITY[OWNED] zvednuto na 3", MapBuilder.PROP_DENSITY[GameData.Terrain.OWNED])
 	_check(MapBuilder.PROP_DENSITY[GameData.Terrain.MOUNTAIN] == 3, "PROP_DENSITY[MOUNTAIN] zvednuto na 3", MapBuilder.PROP_DENSITY[GameData.Terrain.MOUNTAIN])
 
-	_check(MapBuilder._variant_bucket(Vector2i(0, 0)) == MapBuilder._variant_bucket(Vector2i(1, 1)), "blizke bunky sdili plosku", true)
+	_check(MapBuilder._variant_bucket(Vector2i(0, 0)) == MapBuilder._variant_bucket(Vector2i(-1, -1)), "blizke bunky sdili plosku", true)
 	_check(MapBuilder._variant_bucket(Vector2i(0, 0)) != MapBuilder._variant_bucket(Vector2i(20, 20)), "vzdalene bunky jsou v jine plosce", true)

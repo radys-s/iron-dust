@@ -259,6 +259,24 @@ static func prop_scale(name: String) -> float:
 	return scale
 
 
+static var _prop_bounds: Dictionary = {}
+
+
+## Nativní obálka modelu (bez měřítka), cachovaná — pro věci, co se musí
+## vycentrovat/roztáhnout přesně (ploty), ne jen vejít na hex.
+static func prop_bounds(name: String) -> AABB:
+	if _prop_bounds.has(name):
+		return _prop_bounds[name]
+	var scene := prop_scene(name)
+	var bounds := AABB()
+	if scene != null:
+		var probe := scene.instantiate()
+		bounds = _mesh_bounds(probe, AABB())
+		probe.free()
+	_prop_bounds[name] = bounds
+	return bounds
+
+
 ## Obálka všech meshů ve stromu. Prázdné AABB znamená "ještě nic nenalezeno",
 ## takže první nalezený mesh obálku založí místo aby ji sloučil s nulou v počátku.
 static func _mesh_bounds(node: Node, acc: AABB) -> AABB:
@@ -285,6 +303,70 @@ static func building_scene(name: String) -> PackedScene:
 
 static func rim_height(type: TileType) -> float:
 	return float(RIM_HEIGHTS.get(type, RIM_HEIGHT_DEFAULT))
+
+
+## Dlaždice s kopcem/horou/kameny nemají jednu výšku povrchu (hora: 0.2 u
+## okraje, 1.09 na vrcholu), takže jediná hodnota v RIM_HEIGHTS by dekoraci
+## buď zahrabala, nebo nechala vznášet. Pro ně se výška zjistí z reálného meshe.
+const BUMPY_TILES := [
+	TileType.GRASS_HILL, TileType.SAND_DESERT, TileType.SAND_ROCKS,
+	TileType.STONE_HILL, TileType.STONE_MOUNTAIN, TileType.STONE_ROCKS,
+]
+const HEIGHT_STEP := 0.05
+const HEIGHT_NX := 21  # x od -0.5 do 0.5
+const HEIGHT_NZ := 25  # z od -0.6 do 0.6
+
+static var _height_grids: Dictionary = {}
+
+
+## Výška povrchu dlaždice `type` v bodě `flat` (x, z od středu, v jednotkách
+## hexu, bez měřítka). Ploché typy vrací rim_height().
+static func surface_height(type: TileType, flat: Vector2) -> float:
+	if not BUMPY_TILES.has(type):
+		return rim_height(type)
+	if not _height_grids.has(type):
+		_height_grids[type] = _build_height_grid(type)
+	var grid: PackedFloat32Array = _height_grids[type]
+	var ix := clampi(roundi((flat.x + 0.5) / HEIGHT_STEP), 0, HEIGHT_NX - 1)
+	var iz := clampi(roundi((flat.y + 0.6) / HEIGHT_STEP), 0, HEIGHT_NZ - 1)
+	return grid[iz * HEIGHT_NX + ix]
+
+
+static func _build_height_grid(type: TileType) -> PackedFloat32Array:
+	var grid := PackedFloat32Array()
+	grid.resize(HEIGHT_NX * HEIGHT_NZ)
+	grid.fill(rim_height(type))
+
+	var probe := terrain_scene(type).instantiate()
+	var parts: Array = []  # [{tri: TriangleMesh, xf: Transform3D}]
+	_collect_triangle_meshes(probe, Transform3D.IDENTITY, parts)
+
+	for iz in HEIGHT_NZ:
+		for ix in HEIGHT_NX:
+			var x := -0.5 + float(ix) * HEIGHT_STEP
+			var z := -0.6 + float(iz) * HEIGHT_STEP
+			var best := -INF
+			for part in parts:
+				var xf: Transform3D = part["xf"]
+				var inv := xf.affine_inverse()
+				var hit: Dictionary = (part["tri"] as TriangleMesh).intersect_ray(
+					inv * Vector3(x, 3.0, z), inv.basis * Vector3.DOWN)
+				if not hit.is_empty():
+					best = maxf(best, (xf * (hit["position"] as Vector3)).y)
+			if best > -INF:
+				grid[iz * HEIGHT_NX + ix] = best
+	probe.free()
+	return grid
+
+
+static func _collect_triangle_meshes(node: Node, parent_xf: Transform3D, out: Array) -> void:
+	var xf := parent_xf
+	if node is Node3D:
+		xf = parent_xf * (node as Node3D).transform
+	if node is MeshInstance3D and node.mesh != null:
+		out.append({"tri": (node.mesh as Mesh).generate_triangle_mesh(), "xf": xf})
+	for child in node.get_children():
+		_collect_triangle_meshes(child, xf, out)
 
 
 static func _load_cached(path: String) -> PackedScene:
