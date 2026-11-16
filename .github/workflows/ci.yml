@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GODOT_VERSION: 4.7.2
+
+jobs:
+  godot:
+    name: godot headless checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache Godot
+        id: cache
+        uses: actions/cache@v6
+        with:
+          path: ~/godot
+          key: godot-${{ env.GODOT_VERSION }}-linux
+
+      - name: Download Godot
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/godot && cd ~/godot
+          curl -fsSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q godot.zip && rm godot.zip
+          mv Godot_v*_linux.x86_64 godot
+
+      - run: echo "$HOME/godot" >> "$GITHUB_PATH"
+
+      - name: Import project
+        run: godot --headless --path . --import
+
+      # --import exits 0 on parse errors, so load every script with autoloads registered.
+      - name: Check scripts
+        run: godot --headless --path . --script res://scripts/dev/check_scripts.gd
+
+      - name: Dev tests
+        run: |
+          for t in actions combat connectivity economy enemy_ai map_economy menu_flow playthrough save trade victory; do
+            echo "::group::${t}_test"
+            godot --headless --path . --script "res://scripts/dev/${t}_test.gd"
+            echo "::endgroup::"
+          done
